@@ -8,16 +8,3 @@ __pycache__/
 *.yaml
 *.yml
 config.py
-pre_trained
-
-src/Figure/
-src/visualization/
-
-.DS_Store
-classification/convertor/
-segmentation/convertor/
-checkpoint_dir/
-InternImage/segmentation/demo/
-pretrained/
-work_dirs/
-ops_dcnv3/

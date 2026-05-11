@@ -15,6 +15,7 @@ from pycocotools import mask as maskUtils
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import config as cfg
 from evaluator import load_json, ann_to_mask, to_label_index_image
+from util import find_best_pred_json_path
 
 
 class Table2Builder:
@@ -25,7 +26,7 @@ class Table2Builder:
         self.label_dir = os.path.join(cfg.DATASET_PATH, 'annotations', 'validation')
 
     def build(self):
-        model_name, merge_count, pred_json_path = self._find_best_target()
+        model_name, merge_count, pred_json_path = find_best_pred_json_path(self.table1_csv_path)
         gt_counts, pred_counts = self._count_objects(pred_json_path)
         ap20_dict = self._evaluate_ap20_per_class(pred_json_path)
         miou_dict = self._evaluate_miou_per_class(pred_json_path)
@@ -33,22 +34,6 @@ class Table2Builder:
         self._save(result)
         self._verify(result, model_name, merge_count)
 
-    def _find_best_target(self):
-        df = pd.read_csv(self.table1_csv_path)
-        best_row = df.sort_values('AP20', ascending=False, na_position='last').iloc[0]
-        model_name = best_row['model_name']
-        merge_count = int(best_row['merge_count'])
-        t, s, e = int(best_row['thicknesses']), int(best_row['sample_strides']), int(best_row['extend_lens'])
-        print(f"Best target: model={model_name}, merge_count={merge_count}, AP20={best_row['AP20']:.6f}")
-        pred_json_path = self._build_pred_json_path(model_name, merge_count, t, s, e)
-        return model_name, merge_count, pred_json_path
-
-    def _build_pred_json_path(self, model_name, merge_count: int, t, s, e):
-        model_dir = cfg.MODEL_PREFIX + model_name
-        param_dir = f"thick={t},stride={s},extend={e}"
-        filename = "origin" if merge_count == 0 else f"merge{merge_count}"
-        pred_json_path = os.path.join(cfg.RESULT_PATH, model_dir, param_dir, f"coco_pred_instances_{filename}.json")
-        return pred_json_path
 
     def _count_objects(self, pred_json_path):
         print("\n개체 수 집계 중...")

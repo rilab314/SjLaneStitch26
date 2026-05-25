@@ -33,10 +33,17 @@ python lane_detector.py
 python run_experiments.py
 
 # 단일 실행 결과 평가 및 table_1.csv 생성
-python Table/Table_1.py
+python Table/table_1.py
 
 # 최적 모델/파라미터를 찾고 table_2.csv (클래스별 지표) 생성
-python Table/Table_2.py
+python Table/table_2.py
+
+# 논문용 Ablation Study 테이블 (table_3.csv) 생성
+python Table/table_3.py
+
+# 시각화 결과 생성
+python Figure/figure_1_raw.py
+python Figure/figure_2.py
 ```
 
 ---
@@ -69,16 +76,19 @@ python Table/Table_2.py
 ### 데이터 흐름
 
 ```
-ade20k/images/validation/*.png         ← 입력 이미지
+ade20k/images/validation/*.png         ← 입력 위성 이미지
 MODEL_PATH/prediction/*.png            ← 세그멘테이션 모델 출력 (클래스별 색상 코딩)
 ade20k/annotations/validation/*.png   ← GT 레이블 이미지 (팔레트 인덱스 형식)
         ↓
 LineStringDetector.detect_lines()
         ↓
-coco_pred_instances_{origin_all,origin_long,merged_all,merged_long}.json
+coco_pred_instances_origin.json        # (c) 초기 벡터화 (skeletonization 직후)
+coco_pred_instances_merge{1,2,3}.json  # 단계별 병합 결과 (merge3가 최종)
         ↓
-Table_1.evaluate_all() → table_1.csv  (알고리즘 변형별 AP10/AP20/AP50/mIoU)
-Table_2.evaluate_per_class_metrics() → table_2.csv  (차선 클래스별 AP20/mIoU)
+table_1.py → table_1.csv               # 알고리즘 변형별 성능 (AP, mIoU)
+table_2.py → table_2.csv               # 차선 클래스별 성능 (AP20, mIoU)
+table_3.py → table_3.csv               # Ablation study
+figure_2.py → Figure_2/*.jpg           # 2x2 시각화 콜라주
 ```
 
 ## 런타임 디렉토리 구조
@@ -86,19 +96,23 @@ Table_2.evaluate_per_class_metrics() → table_2.csv  (차선 클래스별 AP20/
 ```
 DATA_ROOT/
   ade20k/
-    images/validation/*.png
+    images/validation/*.png               # 원본 위성 이미지
     annotations/validation/*.png          # GT 팔레트 인덱스 레이블 이미지
-    color_annotations/validation/*.png
-  Internimage/<model_name>/
-    prediction/*.png                       # 색상 코딩된 세그멘테이션 예측
-    metrics.json                           # 첫 평가 시 자동 생성되는 mIoU 캐시
+  Internimage/ (또는 Mask2Former/)
+    <model_name>/
+      prediction/*.png                    # 색상 코딩된 세그멘테이션 예측
   results/
-    merged_annotations.json               # COCO GT 어노테이션
-    <model_name>/<param_name>/
-      coco_pred_instances_*.json
-      Table/table_1.csv
-    table_1_all.csv
-    final/
-      table_1.csv
-      table_2.csv
+    merged_annotations.json               # COCO 형식 GT 어노테이션
+    num_params.csv                        # 모델별 파라미터 수
+    <model_name>/
+      thick=T,stride=S,extend=E/          # 하이퍼파라미터 조합별 출력
+        coco_pred_instances_origin.json   # 초기 추출된 LineString
+        coco_pred_instances_merge3.json   # 최종 병합된 LineString
+        eval_result.csv                   # 해당 조합의 상세 성능
+    Tables/
+      table_1.csv, table_2.csv, table_3.csv
+    Figure/
+      Figure_1_raw/                       # Figure 1용 개별 시각화 결과
+      Figure_2/                           # Figure 2용 2x2 콜라주 ([이미지명].jpg)
+      figure1.jpg                         # Figure 1 최종 콜라주
 ```

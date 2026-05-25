@@ -1,147 +1,176 @@
 import os
+import sys
 import json
 import cv2
 import numpy as np
 from pycocotools import mask as maskUtils
+from tqdm import tqdm
 
-import config as cfg
+current_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.abspath(os.path.join(current_dir, "../../"))
+if project_root not in sys.path:
+    sys.path.append(project_root)
 
-# ================= 설정 섹션 (경로 하드코딩) =================
-# 입력 경로
-ORIGINAL_IMG_DIR = os.path.join(cfg.DATA_PATH, 'images', 'validation')  # 원본 이미지 폴더
-JSON_A_PATH = cfg.COCO_ANNO_PATH  # 데이터 (a) 경로
-IMG_B_DIR = os.path.join(cfg.DATA_PATH, 'prediction')  # 이미지 (b) 폴더
-IMG_C_DIR = os.path.join(cfg.DATA_PATH, 'result', 'Figure', 'Figure_2', 'Figure_2_c')  # 이미지 (c) 폴더
-JSON_D_PATH = os.path.join(cfg.DATA_PATH, 'result', 'coco_pred_instances_merged.json')  # 데이터 (d) 경로
+import src.config as cfg
 
-# 출력 경로
-BASE_OUT = os.path.join(cfg.DATA_PATH, 'result', 'Figure', 'Figure_2')
-OUT_A = os.path.join(BASE_OUT, 'Figure_2_a')
-OUT_B = os.path.join(BASE_OUT, 'Figure_2_b')
-OUT_C = os.path.join(BASE_OUT, 'Figure_2_c_white')
-OUT_D = os.path.join(BASE_OUT, 'Figure_2_d')
+def main():
+    """Main execution flow for generating Figure 2 collage."""
+    # 1. Configuration & Paths
+    best_model = "satellite_ade20k_250925_internimage_large"
+    best_param = "thick=3,stride=10,extend=20"
+    result_subdir = os.path.join(cfg.RESULT_PATH, best_model, best_param)
 
-# 제외할 카테고리 ID 리스트
-EXCLUDE_IDS = [8, 10]
+    paths = {
+        'json_gt': cfg.COCO_ANNO_PATH,
+        'json_origin': os.path.join(result_subdir, "coco_pred_instances_origin.json"),
+        'json_merged': os.path.join(result_subdir, "coco_pred_instances_merge3.json"),
+        'pred_dir': cfg.PRED_PATH,
+        'original_img_dir': os.path.join(cfg.DATASET_PATH, 'images', 'validation'),
+        'output_dir': os.path.join(cfg.RESULT_PATH, 'Figure', 'Figure_2')
+    }
 
-# METAINFO 기반 색상표 구성
-METAINFO = [
-    {'id': 0, 'name': 'ignore', 'color': (0, 0, 0)},
-    {'id': 1, 'name': 'center_line', 'color': (255, 77, 77)},
-    {'id': 2, 'name': 'u_turn_zone_line', 'color': (255, 178, 77)},
-    {'id': 3, 'name': 'lane_line', 'color': (77, 255, 77)},
-    {'id': 4, 'name': 'bus_only_lane', 'color': (77, 153, 255)},
-    {'id': 5, 'name': 'edge_line', 'color': (77, 77, 255)},
-    {'id': 6, 'name': 'path_change_restriction_line', 'color': (255, 77, 178)},
-    {'id': 7, 'name': 'no_parking_stopping_line', 'color': (178, 255, 77)},
-    {'id': 8, 'name': 'guiding_line', 'color': (77, 178, 255)},
-    {'id': 9, 'name': 'stop_line', 'color': (255, 102, 77)},
-    {'id': 10, 'name': 'safety_zone', 'color': (128, 77, 255)},
-    {'id': 11, 'name': 'bicycle_lane', 'color': (77, 255, 128)},
-]
+    viz_settings = {
+        'gap': 20,
+        'gap_color': 0, # Black
+        'exclude_ids': [0, 8, 10, 11],
+        'font': cv2.FONT_HERSHEY_SIMPLEX,
+        'font_scale': 1.2,
+        'font_thickness': 3
+    }
 
-# ID를 키로 하는 팔레트 딕셔너리 생성
-PALETTE_BGR = {}
-for item in METAINFO:
-    # 8, 10번은 검은색으로 처리하여 나중에 배경(흰색)으로 바뀌게 함
-    if item['id'] in EXCLUDE_IDS:
-        PALETTE_BGR[item['id']] = (0, 0, 0)
-    else:
-        PALETTE_BGR[item['id']] = item['color']
+    print("Initializing Figure 2 generation...")
+    os.makedirs(paths['output_dir'], exist_ok=True)
 
-for p in [OUT_A, OUT_B, OUT_C, OUT_D]:
-    os.makedirs(p, exist_ok=True)
+    # 2. Load all necessary data
+    gt_data = load_json(paths['json_gt'])
+    origin_anns = load_json(paths['json_origin'])
+    merged_anns = load_json(paths['json_merged'])
+
+    # 3. Group annotations by image_id for efficient lookup
+    gt_map = group_annotations_by_image(gt_data['annotations'])
+    origin_map = group_annotations_by_image(origin_anns)
+    merged_map = group_annotations_by_image(merged_anns)
+
+    # 4. Process images and create collages
+    for img_info in tqdm(gt_data['images'], desc="Generating collages"):
+        img_id = img_info['id']
+        file_name = img_info['file_name']
+        img_w, img_h = img_info['width'], img_info['height']
+
+        # (a) Original image + GT annotations
+        img_a = generate_a_gt_overlay(file_name, gt_map.get(img_id, []), paths['original_img_dir'], viz_settings['exclude_ids'])
+        
+        # (b) Pixel-wise segmentation results
+        img_b = generate_b_segmentation(file_name, paths['pred_dir'])
+        
+        # (c) Initial vectorized linestrings (from skeletonization)
+        img_c = generate_vectorized_mask(img_h, img_w, origin_map.get(img_id, []), viz_settings['exclude_ids'])
+        
+        # (d) Final merged linestrings
+        img_d = generate_vectorized_mask(img_h, img_w, merged_map.get(img_id, []), viz_settings['exclude_ids'])
+
+        if any(img is None for img in [img_a, img_b, img_c, img_d]):
+            continue
+
+        # Combine into 2x2 collage
+        collage = create_2x2_collage(img_a, img_b, img_c, img_d, gap=viz_settings['gap'], gap_color=viz_settings['gap_color'])
+        
+        # Save results
+        save_path = os.path.join(paths['output_dir'], f"{os.path.splitext(file_name)[0]}.jpg")
+        cv2.imwrite(save_path, collage)
+
+    print(f"Done! Figure 2 collages are saved in: {paths['output_dir']}")
 
 
-def process_background_white_with_exclusion(img_path, save_path):
-    """배경(0,0,0)과 제외된 클래스 색상을 찾아 흰색(255,255,255)으로 변경"""
+# ================= Helper Functions =================
+
+def load_json(path):
+    """Load JSON file and return data."""
+    if not os.path.exists(path):
+        print(f"Warning: File not found - {path}")
+        return []
+    with open(path, 'r') as f:
+        return json.load(f)
+
+def group_annotations_by_image(annotations):
+    """Group list of annotations into a dictionary keyed by image_id."""
+    mapping = {}
+    for ann in annotations:
+        img_id = ann['image_id']
+        if img_id not in mapping:
+            mapping[img_id] = []
+        mapping[img_id].append(ann)
+    return mapping
+
+def generate_a_gt_overlay(file_name, anns, img_dir, exclude_ids):
+    """Draw Ground Truth polygons on original image."""
+    img_path = os.path.join(img_dir, file_name)
     img = cv2.imread(img_path)
-    if img is None: return
+    if img is None:
+        return None
 
-    # 1. 원본 팔레트에서 8, 10번의 실제 색상을 찾아와서 배경과 함께 흰색으로 처리
-    # (이미 생성된 이미지 B, C를 처리하기 위한 로직)
-    target_colors = [(0, 0, 0)] # 기본 배경색
-    for item in METAINFO:
-        if item['id'] in EXCLUDE_IDS:
-            # 원본 색상 (BGR 순서로 뒤집어서 추가)
-            target_colors.append(item['color'])
+    for ann in anns:
+        cat_id = ann['category_id']
+        if cat_id in exclude_ids:
+            continue
+        
+        color = cfg.ID2BGR.get(cat_id, (255, 255, 255))
+        if 'segmentation' in ann:
+            segs = ann['segmentation']
+            if isinstance(segs, list):
+                if len(segs) > 0 and isinstance(segs[0], (int, float)):
+                    segs = [segs]
+                
+                for seg in segs:
+                    if len(seg) < 6:
+                        continue
+                    pts = np.array(seg).reshape((-1, 1, 2)).astype(np.int32)
+                    cv2.fillPoly(img, [pts], color)
+    return img
 
-    for color in target_colors:
-        mask = np.all(img == color, axis=-1)
-        img[mask] = [255, 255, 255]
+def generate_b_segmentation(file_name, pred_dir):
+    """Load segmentation prediction and set background to white."""
+    pred_path = os.path.join(pred_dir, file_name)
+    if not os.path.exists(pred_path):
+        base = os.path.splitext(file_name)[0]
+        pred_path = os.path.join(pred_dir, base + ".png")
+        
+    img = cv2.imread(pred_path)
+    if img is None:
+        return None
 
-    cv2.imwrite(save_path, img)
+    black_mask = np.all(img == [0, 0, 0], axis=-1)
+    img[black_mask] = [255, 255, 255]
+    return img
+
+def generate_vectorized_mask(h, w, anns, exclude_ids):
+    """Render vectorized linestrings from JSON on a white background."""
+    img = np.full((h, w, 3), 255, dtype=np.uint8)
+
+    for ann in anns:
+        cat_id = ann['category_id']
+        if cat_id in exclude_ids:
+            continue
+        
+        color = cfg.ID2BGR.get(cat_id, (255, 255, 255))
+        if 'segmentation' in ann:
+            mask = maskUtils.decode(ann['segmentation'])
+            img[mask > 0] = color
+    return img
 
 
-# 1. [작업 a] 원본 이미지 위에 GT 그리기 (8, 10 제외)
-print("Processing (a)...")
-with open(JSON_A_PATH, 'r') as f:
-    data_a = json.load(f)
+def create_2x2_collage(img_a, img_b, img_c, img_d, gap=20, gap_color=0):
+    """Combine four images into a 2x2 grid with gaps."""
+    h, w, _ = img_a.shape
+    collage_h = h * 2 + gap
+    collage_w = w * 2 + gap
+    collage = np.full((collage_h, collage_w, 3), gap_color, dtype=np.uint8)
+    
+    collage[0:h, 0:w] = img_a
+    collage[0:h, w+gap : w*2+gap] = img_b
+    collage[h+gap : h*2+gap, 0:w] = img_c
+    collage[h+gap : h*2+gap, w+gap : w*2+gap] = img_d
+    return collage
 
-img_to_anns = {}
-annotations = data_a.get('annotations', data_a)
-if not isinstance(annotations, list):
-    annotations = [annotations]
-
-for ann in annotations:
-    img_id = ann['image_id']
-    if img_id not in img_to_anns:
-        img_to_anns[img_id] = []
-    img_to_anns[img_id].append(ann)
-
-for img_id, anns in img_to_anns.items():
-    img_name = f"{img_id}.png"
-    src_path = os.path.join(ORIGINAL_IMG_DIR, img_name)
-
-    if os.path.exists(src_path):
-        img = cv2.imread(src_path)
-
-        for ann in anns:
-            category_id = ann['category_id']
-            if category_id in EXCLUDE_IDS:
-                continue # 8, 10번은 그리지 않음
-
-            color = PALETTE_BGR.get(category_id, (255, 255, 255))
-            for seg in ann['segmentation']:
-                pts = np.array(seg).reshape((-1, 1, 2)).astype(np.int32)
-                cv2.fillPoly(img, [pts], color)
-
-        cv2.imwrite(os.path.join(OUT_A, img_name), img)
-
-# 2. [작업 b & c] 기존 이미지 처리 (배경 + 8, 10번을 흰색으로)
-print("Processing (b) and (c)...")
-for folder_in, folder_out in [(IMG_B_DIR, OUT_B), (IMG_C_DIR, OUT_C)]:
-    if not os.path.exists(folder_in):
-        continue
-    for f_name in os.listdir(folder_in):
-        if f_name.lower().endswith(('.png', '.jpg', '.jpeg')):
-            process_background_white_with_exclusion(os.path.join(folder_in, f_name), os.path.join(folder_out, f_name))
-
-# 3. [작업 d] JSON(d) 기반 (8, 10 제외하고 흰 배경에 그리기)
-print("Processing (d)...")
-with open(JSON_D_PATH, 'r') as f:
-    data_d = json.load(f)
-
-combined_masks = {}
-
-for ann in data_d:
-    category_id = ann['category_id']
-    if category_id in EXCLUDE_IDS:
-        continue # 8, 10번 제외
-
-    img_id = ann['image_id']
-    if img_id not in combined_masks:
-        h, w = ann['segmentation']['size']
-        combined_masks[img_id] = np.zeros((h, w, 3), dtype=np.uint8)
-
-    mask = maskUtils.decode(ann['segmentation'])
-    color = PALETTE_BGR.get(category_id, (255, 255, 255))
-    combined_masks[img_id][mask > 0] = color
-
-# 결과 저장 (검은 배경 -> 흰색 반전)
-for img_id, mask_img in combined_masks.items():
-    black_pixels = np.all(mask_img == [0, 0, 0], axis=-1)
-    mask_img[black_pixels] = [255, 255, 255]
-    cv2.imwrite(os.path.join(OUT_D, f"{img_id}.png"), mask_img)
-
-print(f"Done! All figures (excluding ID 8, 10) are saved in: {BASE_OUT}")
+if __name__ == "__main__":
+    main()

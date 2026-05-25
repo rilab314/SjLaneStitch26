@@ -76,7 +76,7 @@ class FigureGenerator:
                 continue
 
             seg = ann.get('segmentation')
-            color = cfg.ID2BGR.get(category_id, (0, 0, 0))
+            color = cfg.RENDER_ID2BGR.get(category_id, (0, 0, 0))
             self._draw_mask(img, seg, color)
         return img
 

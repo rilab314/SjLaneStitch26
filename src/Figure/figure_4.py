@@ -15,18 +15,29 @@ for path in [project_root, src_dir, backup_dir]:
 
 import src.config as cfg
 from src.lane_detector import LineStringDetector
+from src.util import find_best_pred_json_path
 
 def main():
     """Main execution flow for generating Figure 4 collages and individual panels."""
     # 1. Configuration & Paths
-    best_model = "satellite_ade20k_250925_internimage_large"
-    best_param = "thick=3,stride=10,extend=20"
-    result_subdir = os.path.join(cfg.RESULT_PATH, best_model, best_param)
+    csv_path = os.path.join(cfg.RESULT_PATH, 'total_performance.csv')
+    model_name, merge_count, best_pred_path = find_best_pred_json_path(csv_path)
+    
+    if model_name is None:
+        model_name = "internimage_large"
+        result_subdir = os.path.join(cfg.RESULT_PATH, "satellite_ade20k_250925_" + model_name, "thick=3,stride=10,extend=20")
+    else:
+        result_subdir = os.path.dirname(best_pred_path)
+
+    model_dir = cfg.MODEL_PREFIX + model_name
+    model_type = "Internimage" if "internimage" in model_name.lower() else "mask2former"
+    model_path = os.path.join(cfg.DATA_ROOT, model_type, model_dir)
+    pred_dir = os.path.join(model_path, 'prediction')
 
     paths = {
         'json_origin': os.path.join(result_subdir, "coco_pred_instances_origin.json"),
         'json_merge1': os.path.join(result_subdir, "coco_pred_instances_merge1.json"),
-        'pred_dir': cfg.PRED_PATH,
+        'pred_dir': pred_dir,
         'original_img_dir': os.path.join(cfg.DATASET_PATH, 'images', 'validation'),
         'output_dir': os.path.join(cfg.RESULT_PATH, 'Figure', 'Figure_4')
     }
@@ -50,7 +61,20 @@ def main():
     print(f"Selected {len(candidates)} candidate frames for Figure 4 generation.")
 
     # 3. Instantiate detector to fetch intermediate steps
-    detector = LineStringDetector(cfg.DATASET_PATH, cfg.MODEL_PATH, cfg.RESULT_PATH)
+    param_dir_name = os.path.basename(result_subdir)
+    params = dict(item.split('=') for item in param_dir_name.split(','))
+    t = int(params.get('thick', 3))
+    s = int(params.get('stride', 10))
+    e = int(params.get('extend', 20))
+
+    detector = LineStringDetector(
+        cfg.DATASET_PATH, 
+        model_path, 
+        cfg.RESULT_PATH,
+        thickness=t,
+        sample_stride=s,
+        extend_len=e
+    )
 
     # 4. Generate panels and collages
     total_cand = len(candidates)

@@ -1,6 +1,10 @@
 import os
 import pandas as pd
 import sys
+import json
+import cv2
+import numpy as np
+from pycocotools import mask as maskUtils
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
 if current_dir not in sys.path:
@@ -34,3 +38,54 @@ def find_best_pred_json_path(csv_path):
     pred_json_path = os.path.join(cfg.RESULT_PATH, model_dir, param_dir, f"coco_pred_instances_{filename}.json")
     
     return model_name, merge_count, pred_json_path
+
+
+def load_json(path):
+    """Load JSON file and return data."""
+    if not os.path.exists(path):
+        print(f"Warning: File not found - {path}")
+        return []
+    with open(path, 'r') as f:
+        return json.load(f)
+
+
+def group_annotations_by_image(annotations):
+    """Group list of annotations into a dictionary keyed by image_id."""
+    mapping = {}
+    for ann in annotations:
+        img_id = ann['image_id']
+        mapping.setdefault(img_id, []).append(ann)
+    return mapping
+
+
+def draw_annotations_on_image(img, annotations, exclude_ids):
+    """Draws a list of annotations (polygons or RLE masks) on an image."""
+    for ann in annotations:
+        cat_id = ann.get('category_id')
+        if cat_id in exclude_ids:
+            continue
+
+        color = cfg.RENDER_ID2BGR.get(cat_id, cfg.ID2BGR.get(cat_id, (255, 255, 255)))
+        seg = ann.get('segmentation')
+        if seg is None:
+            continue
+
+        if isinstance(seg, dict) and 'counts' in seg:
+            # RLE mask
+            try:
+                binary_mask = maskUtils.decode(seg)
+                if binary_mask.ndim == 3:
+                    binary_mask = binary_mask[:, :, 0]
+                img[binary_mask > 0] = color
+            except Exception as e:
+                print(f"Error decoding RLE mask: {e}")
+        elif isinstance(seg, list):
+            # Polygon
+            if len(seg) > 0 and isinstance(seg[0], (int, float)):
+                seg = [seg]
+            for polygon in seg:
+                if len(polygon) < 6:
+                    continue
+                pts = np.array(polygon).reshape((-1, 1, 2)).astype(np.int32)
+                cv2.fillPoly(img, [pts], color)
+    return img

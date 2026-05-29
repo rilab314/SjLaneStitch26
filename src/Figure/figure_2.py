@@ -1,9 +1,7 @@
 import os
 import sys
-import json
 import cv2
 import numpy as np
-from pycocotools import mask as maskUtils
 from tqdm import tqdm
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -12,19 +10,36 @@ if project_root not in sys.path:
     sys.path.append(project_root)
 
 import src.config as cfg
+from src.util import (
+    find_best_pred_json_path,
+    load_json,
+    group_annotations_by_image,
+    draw_annotations_on_image
+)
 
 def main():
     """Main execution flow for generating Figure 2 collage."""
     # 1. Configuration & Paths
-    best_model = "satellite_ade20k_250925_internimage_large"
-    best_param = "thick=3,stride=10,extend=20"
-    result_subdir = os.path.join(cfg.RESULT_PATH, best_model, best_param)
+    csv_path = os.path.join(cfg.RESULT_PATH, 'total_performance.csv')
+    model_name, merge_count, best_pred_path = find_best_pred_json_path(csv_path)
+    
+    if model_name is None:
+        model_name = "internimage_large"
+        merge_count = 3
+        result_subdir = os.path.join(cfg.RESULT_PATH, "satellite_ade20k_250925_" + model_name, "thick=3,stride=10,extend=20")
+        best_pred_path = os.path.join(result_subdir, "coco_pred_instances_merge3.json")
+    else:
+        result_subdir = os.path.dirname(best_pred_path)
+
+    model_dir = cfg.MODEL_PREFIX + model_name
+    model_type = "Internimage" if "internimage" in model_name.lower() else "mask2former"
+    pred_dir = os.path.join(cfg.DATA_ROOT, model_type, model_dir, 'prediction')
 
     paths = {
         'json_gt': cfg.COCO_ANNO_PATH,
         'json_origin': os.path.join(result_subdir, "coco_pred_instances_origin.json"),
-        'json_merged': os.path.join(result_subdir, "coco_pred_instances_merge3.json"),
-        'pred_dir': cfg.PRED_PATH,
+        'json_merged': best_pred_path,
+        'pred_dir': pred_dir,
         'original_img_dir': os.path.join(cfg.DATASET_PATH, 'images', 'validation'),
         'output_dir': os.path.join(cfg.RESULT_PATH, 'Figure', 'Figure_2')
     }
@@ -32,7 +47,7 @@ def main():
     viz_settings = {
         'gap': 20,
         'gap_color': 0, # Black
-        'exclude_ids': [0, 8, 10, 11],
+        'exclude_ids': cfg.EXCLUDE_IDS,
         'font': cv2.FONT_HERSHEY_SIMPLEX,
         'font_scale': 1.2,
         'font_thickness': 3
@@ -84,49 +99,13 @@ def main():
 
 # ================= Helper Functions =================
 
-def load_json(path):
-    """Load JSON file and return data."""
-    if not os.path.exists(path):
-        print(f"Warning: File not found - {path}")
-        return []
-    with open(path, 'r') as f:
-        return json.load(f)
-
-def group_annotations_by_image(annotations):
-    """Group list of annotations into a dictionary keyed by image_id."""
-    mapping = {}
-    for ann in annotations:
-        img_id = ann['image_id']
-        if img_id not in mapping:
-            mapping[img_id] = []
-        mapping[img_id].append(ann)
-    return mapping
-
 def generate_a_gt_overlay(file_name, anns, img_dir, exclude_ids):
     """Draw Ground Truth polygons on original image."""
     img_path = os.path.join(img_dir, file_name)
     img = cv2.imread(img_path)
     if img is None:
         return None
-
-    for ann in anns:
-        cat_id = ann['category_id']
-        if cat_id in exclude_ids:
-            continue
-        
-        color = cfg.ID2BGR.get(cat_id, (255, 255, 255))
-        if 'segmentation' in ann:
-            segs = ann['segmentation']
-            if isinstance(segs, list):
-                if len(segs) > 0 and isinstance(segs[0], (int, float)):
-                    segs = [segs]
-                
-                for seg in segs:
-                    if len(seg) < 6:
-                        continue
-                    pts = np.array(seg).reshape((-1, 1, 2)).astype(np.int32)
-                    cv2.fillPoly(img, [pts], color)
-    return img
+    return draw_annotations_on_image(img, anns, exclude_ids)
 
 def generate_b_segmentation(file_name, pred_dir):
     """Load segmentation prediction and set background to white."""
@@ -146,18 +125,7 @@ def generate_b_segmentation(file_name, pred_dir):
 def generate_vectorized_mask(h, w, anns, exclude_ids):
     """Render vectorized linestrings from JSON on a white background."""
     img = np.full((h, w, 3), 255, dtype=np.uint8)
-
-    for ann in anns:
-        cat_id = ann['category_id']
-        if cat_id in exclude_ids:
-            continue
-        
-        color = cfg.ID2BGR.get(cat_id, (255, 255, 255))
-        if 'segmentation' in ann:
-            mask = maskUtils.decode(ann['segmentation'])
-            img[mask > 0] = color
-    return img
-
+    return draw_annotations_on_image(img, anns, exclude_ids)
 
 def create_2x2_collage(img_a, img_b, img_c, img_d, gap=20, gap_color=0):
     """Combine four images into a 2x2 grid with gaps."""

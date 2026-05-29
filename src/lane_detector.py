@@ -464,7 +464,18 @@ class LineStringDetector:
 
 
 def main():
-    line_detector = LineStringDetector(cfg.DATASET_PATH, cfg.MODEL_PATH, cfg.RESULT_PATH)
+    from util import find_best_pred_json_path
+    csv_path = os.path.join(cfg.RESULT_PATH, 'total_performance.csv')
+    model_name, _, _ = find_best_pred_json_path(csv_path)
+    
+    if model_name is None:
+        model_name = "internimage_large"
+        
+    model_dir = cfg.MODEL_PREFIX + model_name
+    model_type = "Internimage" if "internimage" in model_name.lower() else "mask2former"
+    model_path = os.path.join(cfg.DATA_ROOT, model_type, model_dir)
+    
+    line_detector = LineStringDetector(cfg.DATASET_PATH, model_path, cfg.RESULT_PATH)
     line_detector.detect_lines()
 
 

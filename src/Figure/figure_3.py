@@ -1,9 +1,7 @@
 import os
 import sys
-import json
 import cv2
 import numpy as np
-from pycocotools import mask as maskUtils
 from tqdm import tqdm
 
 # Setup project root and import config
@@ -13,6 +11,12 @@ if project_root not in sys.path:
     sys.path.append(project_root)
 
 import src.config as cfg
+from src.util import (
+    find_best_pred_json_path,
+    load_json,
+    group_annotations_by_image,
+    draw_annotations_on_image
+)
 
 def main():
     """Main execution flow for generating Figure 3."""
@@ -22,9 +26,19 @@ def main():
     gap = 20
     gap_color = (0, 0, 0)
     
+    csv_path = os.path.join(cfg.RESULT_PATH, 'total_performance.csv')
+    model_name, _, _ = find_best_pred_json_path(csv_path)
+    
+    if model_name is None:
+        model_name = "internimage_large"
+        
+    model_dir = cfg.MODEL_PREFIX + model_name
+    model_type = "Internimage" if "internimage" in model_name.lower() else "mask2former"
+    pred_dir = os.path.join(cfg.DATA_ROOT, model_type, model_dir, 'prediction')
+    
     paths = {
         'gt_json': cfg.COCO_ANNO_PATH,
-        'pred_dir': cfg.PRED_PATH,
+        'pred_dir': pred_dir,
         'img_dir': os.path.join(cfg.DATASET_PATH, 'images', 'validation'),
         'output_dir': os.path.join(cfg.RESULT_PATH, 'Figure', 'Figure_3')
     }
@@ -91,42 +105,12 @@ def main():
 
     print(f"Done! Figure 3 images are saved in: {paths['output_dir']}")
 
-def load_json(path):
-    """Load JSON file and return data."""
-    if not os.path.exists(path):
-        print(f"Warning: File not found - {path}")
-        return {}
-    with open(path, 'r') as f:
-        return json.load(f)
-
-def group_annotations_by_image(annotations):
-    """Group list of annotations into a dictionary keyed by image_id."""
-    mapping = {}
-    for ann in annotations:
-        img_id = ann['image_id']
-        mapping.setdefault(img_id, []).append(ann)
-    return mapping
 
 def generate_gt_overlay(img, annotations, target_id):
     """Draw Ground Truth polygons on image for a specific category."""
-    color = cfg.RENDER_ID2BGR.get(target_id, (255, 255, 255))
-    
-    for ann in annotations:
-        if 'segmentation' in ann:
-            segs = ann['segmentation']
-            if isinstance(segs, list):
-                # Handle COCO polygon format
-                if len(segs) > 0 and isinstance(segs[0], (int, float)):
-                    segs = [segs]
-                for seg in segs:
-                    if len(seg) < 6: continue
-                    pts = np.array(seg).reshape((-1, 1, 2)).astype(np.int32)
-                    cv2.fillPoly(img, [pts], color)
-            elif isinstance(segs, dict):
-                # Handle RLE format
-                mask = maskUtils.decode(segs)
-                img[mask > 0] = color
-    return img
+    target_anns = [ann for ann in annotations if ann.get('category_id') == target_id]
+    return draw_annotations_on_image(img, target_anns, [])
+
 
 def generate_pred_overlay(img, seg_img, target_id):
     """Overlay Prediction masks on image for a specific category."""

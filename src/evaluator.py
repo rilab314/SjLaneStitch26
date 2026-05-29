@@ -22,7 +22,19 @@ IOUs=[0.10, 0.20, 0.50]
 def main():
     coco_gt_json = os.path.join(cfg.RESULT_PATH, "merged_annotations.json")
     label_path = os.path.join(cfg.DATASET_PATH, "annotations", "validation")
-    evaluate_all(coco_gt_json, label_path, cfg.MODEL_PATH, cfg.RESULT_PATH)
+    
+    from util import find_best_pred_json_path
+    csv_path = os.path.join(cfg.RESULT_PATH, 'total_performance.csv')
+    model_name, _, _ = find_best_pred_json_path(csv_path)
+    
+    if model_name is None:
+        model_name = "internimage_large"
+        
+    model_dir = cfg.MODEL_PREFIX + model_name
+    model_type = "Internimage" if "internimage" in model_name.lower() else "mask2former"
+    model_path = os.path.join(cfg.DATA_ROOT, model_type, model_dir)
+    
+    evaluate_all(coco_gt_json, label_path, model_path, cfg.RESULT_PATH)
 
 
 def evaluate_all(coco_gt_json, label_path, model_path, result_path):

@@ -23,17 +23,15 @@ def main():
     coco_gt_json = os.path.join(cfg.RESULT_PATH, "merged_annotations.json")
     label_path = os.path.join(cfg.DATASET_PATH, "annotations", "validation")
     
-    from util import find_best_pred_json_path
+    from util import find_best_pred_json_path, find_model_path
     csv_path = os.path.join(cfg.RESULT_PATH, 'total_performance.csv')
     model_name, _, _ = find_best_pred_json_path(csv_path)
-    
+
     if model_name is None:
         model_name = "internimage_large"
-        
-    model_dir = cfg.MODEL_PREFIX + model_name
-    model_type = "Internimage" if "internimage" in model_name.lower() else "mask2former"
-    model_path = os.path.join(cfg.DATA_ROOT, model_type, model_dir)
-    
+
+    model_path = find_model_path(model_name)
+
     evaluate_all(coco_gt_json, label_path, model_path, cfg.RESULT_PATH)
 
 
@@ -67,17 +65,26 @@ def _filename_to_merge_count(json_file: str) -> int:
     return name  # fallback: 알 수 없는 형식은 이름 그대로 반환
 
 
-def evaluate_segm_pred_miou(model_path: str, label_path: str) -> Dict[str, str]:
+def evaluate_segm_pred_miou(model_path: str, label_path: str) -> Dict[str, float]:
     print(f"===== [evaluate_segm_pred_miou] model_path: {model_path}, label_path: {label_path}")
-    pred_json = os.path.join(model_path, "metrics.json")
-    if os.path.exists(pred_json):
-        data = load_json(pred_json)
-        return {"mIoU": data["mIoU"]}
+    metrics = evaluate_segm_pred_metrics(model_path, label_path)
+    res = {"mIoU": metrics["mIoU"]}
+    print(f"===== [evaluate_segm_pred_miou] res: {res}")
+    return res
+
+
+def evaluate_segm_pred_metrics(model_path: str, label_path: str) -> Dict[str, Any]:
+    """순수 segmentation 예측의 mIoU와 클래스별 IoU를 계산한다 (metrics.json 캐시 사용)"""
+    metrics_json = os.path.join(model_path, "metrics.json")
+    if os.path.exists(metrics_json):
+        data = load_json(metrics_json)
+        if "per_class_iou" in data:  # 클래스별 IoU가 없는 구버전 캐시는 재계산
+            return data
 
     files = glob.glob(os.path.join(label_path, "*.png"))
     intersections = {cid: 0 for cid in cfg.EVAL_CLASS_IDS}
     unions = {cid: 0 for cid in cfg.EVAL_CLASS_IDS}
-    for file in tqdm(files, desc="Segm mIoU"):
+    for file in tqdm(files, desc="Segm IoU"):
         grtr_label = to_label_index_image(cv2.imread(file, cv2.IMREAD_UNCHANGED), True)
         if grtr_label is None:
             continue
@@ -87,12 +94,12 @@ def evaluate_segm_pred_miou(model_path: str, label_path: str) -> Dict[str, str]:
             intersections[cid] += int(np.sum((grtr_label == cid) & (pred_label == cid)))
             unions[cid] += int(np.sum((grtr_label == cid) | (pred_label == cid)))
 
-    ious = [intersections[cid] / unions[cid] for cid in cfg.EVAL_CLASS_IDS if unions[cid] > 0]
-    val = float(np.mean(ious)) if ious else 0.0
-    res = {"mIoU": val}
-    with open(pred_json, 'w') as f:
+    per_class_iou = {str(cid): (intersections[cid] / unions[cid] if unions[cid] > 0 else 0.0)
+                     for cid in cfg.EVAL_CLASS_IDS}
+    valid_ious = [intersections[cid] / unions[cid] for cid in cfg.EVAL_CLASS_IDS if unions[cid] > 0]
+    res = {"mIoU": float(np.mean(valid_ious)) if valid_ious else 0.0, "per_class_iou": per_class_iou}
+    with open(metrics_json, 'w') as f:
         json.dump(res, f)
-    print(f"===== [evaluate_segm_pred_miou] res: {res}")
     return res
 
 
@@ -121,7 +128,8 @@ def evaluate_coco_ap(gt_json: str, pred_json: str):
 
 def _get_selected_annotation(gt_json: str) -> str:
     save_path = os.path.join(os.path.dirname(gt_json), "selected_annotation.json")
-    if os.path.exists(save_path):
+    # 캐시가 원본(gt_json)보다 최신일 때만 재사용. 원본이 갱신되면 캐시를 무효화한다.
+    if os.path.exists(save_path) and os.path.getmtime(save_path) >= os.path.getmtime(gt_json):
         return save_path
 
     gt_data = load_json(gt_json)

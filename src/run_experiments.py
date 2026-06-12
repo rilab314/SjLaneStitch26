@@ -106,7 +106,7 @@ def parse_single_csv(file_path):
 
 
 def main():
-    # run_experiments()
+    run_experiments()
     find_best_model_and_params()
 
 

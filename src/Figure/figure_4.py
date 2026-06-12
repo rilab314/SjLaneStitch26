@@ -45,7 +45,7 @@ def main():
     viz_settings = {
         'gap': 20,
         'gap_color': (0, 0, 0),  # Black separator line
-        'class_color': (255, 77, 77),  # center_line BGR color
+        'class_color': cfg.RENDER_ID2BGR.get(1, cfg.ID2BGR.get(1, (255, 77, 77))),  # center_line BGR color
         'ext_color': (0, 0, 255)  # Red for extrapolation
     }
 
@@ -158,10 +158,14 @@ def generate_panel_a(img_id, pred_dir, color):
     if img is None:
         return None
 
+    # Use original color to find pixels, paint with the new render color
+    orig_color = cfg.ID2BGR.get(1, (255, 77, 77))
+    render_color = cfg.RENDER_ID2BGR.get(1, orig_color)
+
     # Filter only class color
-    mask = np.all(img == color, axis=-1)
+    mask = np.all(img == orig_color, axis=-1)
     out = np.full_like(img, 255)
-    out[mask] = color
+    out[mask] = render_color
     return out
 
 

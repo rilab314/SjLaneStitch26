@@ -76,7 +76,7 @@ def main():
         img_a = generate_a_gt_overlay(file_name, gt_map.get(img_id, []), paths['original_img_dir'], viz_settings['exclude_ids'])
         
         # (b) Pixel-wise segmentation results
-        img_b = generate_b_segmentation(file_name, paths['pred_dir'])
+        img_b = generate_b_segmentation(file_name, paths['pred_dir'], viz_settings['exclude_ids'])
         
         # (c) Initial vectorized linestrings (from skeletonization)
         img_c = generate_vectorized_mask(img_h, img_w, origin_map.get(img_id, []), viz_settings['exclude_ids'])
@@ -107,8 +107,8 @@ def generate_a_gt_overlay(file_name, anns, img_dir, exclude_ids):
         return None
     return draw_annotations_on_image(img, anns, exclude_ids)
 
-def generate_b_segmentation(file_name, pred_dir):
-    """Load segmentation prediction and set background to white."""
+def generate_b_segmentation(file_name, pred_dir, exclude_ids):
+    """Load segmentation prediction and set background/excluded classes to white."""
     pred_path = os.path.join(pred_dir, file_name)
     if not os.path.exists(pred_path):
         base = os.path.splitext(file_name)[0]
@@ -118,8 +118,30 @@ def generate_b_segmentation(file_name, pred_dir):
     if img is None:
         return None
 
+    # Set background (ignore/black) to white
     black_mask = np.all(img == [0, 0, 0], axis=-1)
     img[black_mask] = [255, 255, 255]
+
+    # Paint excluded categories white to hide them
+    for cat_id in exclude_ids:
+        if cat_id in cfg.ID2BGR:
+            color = cfg.ID2BGR[cat_id]
+            mask = np.all(img == color, axis=-1)
+            img[mask] = [255, 255, 255]
+        if hasattr(cfg, 'RENDER_ID2BGR') and cat_id in cfg.RENDER_ID2BGR:
+            color = cfg.RENDER_ID2BGR[cat_id]
+            mask = np.all(img == color, axis=-1)
+            img[mask] = [255, 255, 255]
+
+    # Replace original class colors with their render colors if they differ
+    for cat_id, orig_color in cfg.ID2BGR.items():
+        if cat_id in exclude_ids or cat_id == 0:
+            continue
+        render_color = cfg.RENDER_ID2BGR.get(cat_id)
+        if render_color is not None and render_color != orig_color:
+            mask = np.all(img == orig_color, axis=-1)
+            img[mask] = render_color
+
     return img
 
 def generate_vectorized_mask(h, w, anns, exclude_ids):

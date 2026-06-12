@@ -40,6 +40,13 @@ def find_best_pred_json_path(csv_path):
     return model_name, merge_count, pred_json_path
 
 
+def find_model_path(model_name):
+    """모델 이름으로부터 segmentation 예측 결과가 저장된 모델 디렉토리 경로를 반환한다."""
+    model_dir = cfg.MODEL_PREFIX + model_name
+    model_type = "Internimage" if "internimage" in model_name.lower() else "mask2former"
+    return os.path.join(cfg.DATA_ROOT, model_type, model_dir)
+
+
 def load_json(path):
     """Load JSON file and return data."""
     if not os.path.exists(path):

@@ -14,8 +14,8 @@ from pycocotools import mask as maskUtils
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import config as cfg
-from evaluator import load_json, ann_to_mask, to_label_index_image
-from util import find_best_pred_json_path
+from evaluator import load_json, ann_to_mask, to_label_index_image, evaluate_segm_pred_metrics
+from util import find_best_pred_json_path, find_model_path
 
 
 class Table2Builder:
@@ -27,10 +27,12 @@ class Table2Builder:
 
     def build(self):
         model_name, merge_count, pred_json_path = find_best_pred_json_path(self.table1_csv_path)
+        print('pred_json_path: ', pred_json_path)
         gt_counts, pred_counts = self._count_objects(pred_json_path)
         ap20_dict = self._evaluate_ap20_per_class(pred_json_path)
+        seg_iou_dict = self._evaluate_segm_iou_per_class(model_name)
         miou_dict = self._evaluate_miou_per_class(pred_json_path)
-        result = self._build_result_df(ap20_dict, miou_dict, gt_counts, pred_counts)
+        result = self._build_result_df(ap20_dict, seg_iou_dict, miou_dict, gt_counts, pred_counts)
         self._save(result)
         self._verify(result, model_name, merge_count)
 
@@ -101,6 +103,12 @@ class Table2Builder:
         ap = float(np.mean(p)) if p.size > 0 else 0.0
         return ap
 
+    def _evaluate_segm_iou_per_class(self, model_name):
+        print("\nPer-class segmentation IoU 평가 중 (알고리즘 처리 전 순수 예측)...")
+        model_path = find_model_path(model_name if model_name else 'internimage_large')
+        metrics = evaluate_segm_pred_metrics(model_path, self.label_dir)
+        return {int(cid): iou for cid, iou in metrics['per_class_iou'].items()}
+
     def _evaluate_miou_per_class(self, pred_json_path):
         print("\nPer-class mIoU 평가 중...")
         data = load_json(pred_json_path)
@@ -140,20 +148,21 @@ class Table2Builder:
             pred_label[ann_to_mask(ann, h, w) > 0] = int(ann.get('category_id', 0))
         return pred_label
 
-    def _build_result_df(self, ap20_dict, miou_dict, gt_counts, pred_counts):
+    def _build_result_df(self, ap20_dict, seg_iou_dict, miou_dict, gt_counts, pred_counts):
         rows = [
             {'class_name': cfg.ID2NAME.get(cid, str(cid)),
              'gt_count': gt_counts.get(cid, 0),
              'pred_count': pred_counts.get(cid, 0),
+             'seg_IoU': seg_iou_dict.get(cid, 0.0),
              'AP20': ap20_dict.get(cid, 0.0),
              'mIoU': miou_dict.get(cid, 0.0)}
             for cid in cfg.EVAL_CLASS_IDS
         ]
-        df = pd.DataFrame(rows, columns=['class_name', 'gt_count', 'pred_count', 'AP20', 'mIoU'])
+        df = pd.DataFrame(rows, columns=['class_name', 'gt_count', 'pred_count', 'seg_IoU', 'AP20', 'mIoU'])
         return df
 
     def _save(self, result):
-        result[['AP20', 'mIoU']] = result[['AP20', 'mIoU']].round(4)
+        result[['seg_IoU', 'AP20', 'mIoU']] = result[['seg_IoU', 'AP20', 'mIoU']].round(4)
         os.makedirs(os.path.dirname(self.save_path), exist_ok=True)
         result.to_csv(self.save_path, index=False, encoding='utf-8')
         print(f"\nTable 2 saved to: {self.save_path}")

@@ -16,14 +16,18 @@ class Table1Builder:
     def build(self):
         thickness, stride, extend_len = self._find_best_params()
         result = self._filter_and_sort(thickness, stride, extend_len)
+        result.drop_duplicates(inplace=True, ignore_index=True)
         print('intermediate result\n', result.to_string(index=False))
         result = self._add_params_column(result)
         self._save(result)
 
     def _find_best_params(self):
-        grouped = self.df.groupby(['thicknesses', 'sample_strides', 'extend_lens'])['AP20'].mean()
-        thickness, stride, extend_len = grouped.idxmax()
-        print(f"Best params — thicknesses={thickness}, sample_strides={stride}, extend_lens={extend_len}, mean AP20={grouped.max():.6f}")
+        best_row_idx = self.df['AP20'].idxmax()
+        best_row = self.df.loc[best_row_idx]
+        thickness = best_row['thicknesses']
+        stride = best_row['sample_strides']
+        extend_len = best_row['extend_lens']
+        print(f"Best params — thicknesses={thickness}, sample_strides={stride}, extend_lens={extend_len}, max AP20={best_row['AP20']:.6f}")
         return thickness, stride, extend_len
 
     def _filter_and_sort(self, thickness, stride, extend_len):

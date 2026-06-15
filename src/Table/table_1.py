@@ -55,6 +55,8 @@ class Table1Builder:
     def _save(self, result):
         int_cols = ['merge_count', 'thicknesses', 'sample_strides', 'extend_lens', 'instances']
         result[int_cols] = result[int_cols].astype("Int64")
+        metric_cols = ['AP10', 'AP20', 'AP50', 'mIoU']
+        result[metric_cols] = (result[metric_cols] * 100).round(2)  # % 단위로 변환
         os.makedirs(os.path.dirname(self.save_path), exist_ok=True)
         result.to_csv(self.save_path, index=False, encoding='utf-8')
         print(f"Table 1 saved to: {self.save_path}")

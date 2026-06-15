@@ -37,7 +37,7 @@ class Table3Builder:
 
     def _save(self, result, model_name):
         result[['merge_count', 'instances']] = result[['merge_count', 'instances']].astype(int)
-        result[['AP20', 'mIoU']] = result[['AP20', 'mIoU']].round(4)
+        result[['AP20', 'mIoU']] = (result[['AP20', 'mIoU']] * 100).round(2)  # % 단위로 변환
         os.makedirs(os.path.dirname(self.save_path), exist_ok=True)
         result.to_csv(self.save_path, index=False, encoding='utf-8')
         print(f"\nAblation Study — model: {model_name}")

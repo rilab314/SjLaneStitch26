@@ -63,6 +63,10 @@ python Figure/figure_4.py
 
 # 원본 이미지, 원본+GT overlay, 원본+Prediction (merge2) overlay를 담은 1x3 콜라주 생성 (Figure_5)
 python Figure/figure_5.py
+
+# 원본+GT overlay와 세 모델(internimage_large, mask2former_large, mask2former_small)의
+# segmentation overlay를 비교하는 2x2 콜라주 생성 (Figure_compare, 20px 흰색 구분선)
+python Figure/figure_compare.py
 ```
 
 ---
@@ -123,6 +127,7 @@ figure_2.py                  → Figure_2/*.jpg          # 2x2 비교 콜라주 
 figure_3.py                  → Figure_3/*.png          # Guiding line & Safety zone 비교 콜라주
 figure_4.py                  → Figure_4/*.png          # center_line 병합 중간과정 1x4 콜라주
 figure_5.py                  → Figure_5/*.png          # 1x3 원본/GT/Prediction 비교 콜라주
+figure_compare.py            → Figure_compare/*.png    # 2x2 GT/모델 3종 segmentation overlay 콜라주
 ```
 
 ## 런타임 디렉토리 구조
@@ -175,5 +180,6 @@ DATA_ROOT/
          ├─ Figure_3/                     # figure_3.py 출력 (Guiding/Safety [이미지명].png)
          ├─ Figure_4/                     # figure_4.py 출력 (center_line 병합과정 1x4 콜라주)
          ├─ Figure_5/                     # figure_5.py 출력 (1x3 원본-GT-Prediction 콜라주)
+         ├─ Figure_compare/               # figure_compare.py 출력 (2x2 GT-모델3종 segmentation overlay 콜라주)
          └─ figure1.jpg                   # figure_1_fin.py 출력 (최종 세로형 콜라주)
 ```

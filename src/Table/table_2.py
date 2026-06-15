@@ -162,7 +162,8 @@ class Table2Builder:
         return df
 
     def _save(self, result):
-        result[['seg_IoU', 'AP20', 'mIoU']] = result[['seg_IoU', 'AP20', 'mIoU']].round(4)
+        metric_cols = ['seg_IoU', 'AP20', 'mIoU']
+        result[metric_cols] = (result[metric_cols] * 100).round(2)  # % 단위로 변환
         os.makedirs(os.path.dirname(self.save_path), exist_ok=True)
         result.to_csv(self.save_path, index=False, encoding='utf-8')
         print(f"\nTable 2 saved to: {self.save_path}")
@@ -186,7 +187,8 @@ class Table2Builder:
         print(f"{'AP20':<10} | {avg_ap20:<20.6f} | {t1_ap20:<20.6f} | {abs(avg_ap20 - t1_ap20):<15.6e}")
         print(f"{'mIoU':<10} | {avg_miou:<20.6f} | {t1_miou:<20.6f} | {abs(avg_miou - t1_miou):<15.6e}")
 
-        if abs(avg_ap20 - t1_ap20) < 1e-4 and abs(avg_miou - t1_miou) < 1e-4:
+        # % 단위 기준 허용 오차 0.01%p (반올림 오차 수준)
+        if abs(avg_ap20 - t1_ap20) < 1e-2 and abs(avg_miou - t1_miou) < 1e-2:
             print("\n검증 성공: Table 2 클래스 평균이 Table 1 결과와 일치합니다.")
         else:
             print("\n검증 경고: 유의미한 차이가 감지되었습니다.")

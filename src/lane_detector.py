@@ -453,23 +453,6 @@ class LineStringDetector:
         print('save filename:', filename)
         cv2.imwrite(filename, save_image)
 
-    def _draw_figure4(self, pred_img, line_strings):
-        debug_img = np.full_like(pred_img, 255)
-        for line in line_strings:
-            if line.class_id == 1:
-                if line.id is None:
-                    continue
-                color = self._palette[line.class_id]
-                pts = line.points.reshape((-1, 1, 2))
-                cv2.polylines(debug_img, [pts], isClosed=False, color=color, thickness=3)
-                for pt in pts:
-                    x, y = pt[0]  # 좌표 추출
-                    cv2.circle(debug_img, (int(x), int(y)), radius=2, color=(0, 0, 0), thickness=-1)
-        
-        debug_file_name = os.path.basename(file_name)
-        cv2.imwrite(os.path.join(self.figure_path, 'Figure_4', 'Figure_4_d_alpha', debug_file_name), debug_img)
-
-
 
 def main():
     from util import find_best_pred_json_path

@@ -26,7 +26,6 @@ LineStringDetector(lane_detector.py)의 끝점 겹침 병합 아이디어를 참
 """
 
 import os
-import glob
 import json
 import time
 from dataclasses import dataclass, field
@@ -70,10 +69,15 @@ class MergeAnnotator:
     align_eps = 2.0      # 두 끝점이 사실상 맞닿았다고 볼 거리(px)
     parallel_dist = 12   # 두 본체가 '가깝다'고 볼 측면 거리(px)
     parallel_ratio = 0.4 # 본체가 나란하다고 판정할, 가까운 점들의 비율
+    dup_dist = 3.0       # 두 LineString이 '겹친 복제'인지 볼 점-본체 거리(px)
+    dup_ratio = 0.8      # 한 선의 점이 상대 본체에 겹친 비율 임계 (이 이상이면 복제)
     mask_thickness = 3   # COCO 마스크 렌더링 두께
     dev_time_limit = None  # 개발 중 실행 제한 시간 (초). None 이면 전체 데이터셋 처리
 
-    def __init__(self, label_path: str, image_path: str, compare_path: str, coco_path: str):
+    def __init__(self, split: str, image_ids: List[str], label_path: str,
+                 image_path: str, compare_path: str, coco_path: str):
+        self._split = split
+        self._image_ids = image_ids
         self._label_path = label_path
         self._image_path = image_path
         self._compare_path = compare_path
@@ -90,8 +94,7 @@ class MergeAnnotator:
     # 메인 루프
     # ------------------------------------------------------------------ #
     def run(self):
-        image_files = sorted(glob.glob(os.path.join(self._image_path, '*.png')))
-        print(f'[run] 대상 이미지 {len(image_files)}개')
+        print(f'[run] split={self._split} 대상 이미지 {len(self._image_ids)}개')
 
         # 전체 데이터셋 배치 변환 시에는 imshow를 끄고 진행률만 표시한다.
         full_run = self.dev_time_limit is None
@@ -105,10 +108,11 @@ class MergeAnnotator:
         processed = 0
         start_time = time.time()
 
-        iterator = tqdm(image_files, desc='merge') if full_run else image_files
-        for img_file in iterator:
-            base = os.path.splitext(os.path.basename(img_file))[0]
+        desc = f'merge[{self._split}]'
+        iterator = tqdm(self._image_ids, desc=desc) if full_run else self._image_ids
+        for base in iterator:
             image_id = base  # GT 형식과 동일하게 이미지 id를 basename 문자열로 사용
+            img_file = os.path.join(self._image_path, base + '.png')
             json_file = os.path.join(self._label_path, base + '.json')
             if not os.path.exists(json_file):
                 continue
@@ -121,10 +125,12 @@ class MergeAnnotator:
             if image is not None:
                 self._img_shape = image.shape[:2]
 
-            for lane in lanes:
+            # 끝점 병합 전에 겹친 복제(왕복 스트로크 등)를 먼저 하나로 정리한다.
+            deduped = self._dedup_lanes(lanes)
+            for lane in deduped:
                 self._build_ends(lane)
 
-            merged = self._merge_lanes(lanes)
+            merged = self._merge_lanes(deduped)
 
             total_before += len(lanes)
             total_after += len(merged)
@@ -165,7 +171,7 @@ class MergeAnnotator:
 
         self._save_coco(coco_images, coco_annotations)
 
-        print('\n===== 요약 =====')
+        print(f'\n===== 요약 (split={self._split}) =====')
         print(f'처리한 이미지: {processed}개')
         print(f'차선 객체: {total_before}개 -> {total_after}개 '
               f'({total_before - total_after}개 감소)')
@@ -243,6 +249,53 @@ class MergeAnnotator:
         cv2.line(img, a, b, color=255, thickness=self.seg_thickness)
         ys, xs = np.nonzero(img)
         return set((ys * w + xs).tolist())
+
+    # ------------------------------------------------------------------ #
+    # 중복 제거 (dedup) - 끝점 병합 이전 단계
+    # ------------------------------------------------------------------ #
+    def _dedup_lanes(self, lanes: List[Lane]) -> List[Lane]:
+        """같은 클래스이면서 본체가 거의 일치하는(겹친 복제) LineString들을 하나로 합친다.
+
+        SEED 원본은 한 마킹을 정/역방향 왕복 스트로크 등 거의 동일한 위치의
+        여러 LineString으로 저장한 경우가 많다(특히 u_turn_zone_line).
+        _bodies_parallel 가드는 떨어진 평행 이중선과 겹친 복제를 구분하지 못해
+        이들을 끝점 병합으로 합치지 못하므로, 끝점 병합 전에 별도로 정리한다.
+        간격이 큰 진짜 이중선(예: 이중 중앙선)은 dup_dist(작음)에 걸리지 않아 보존된다."""
+        n = len(lanes)
+        parent = list(range(n))
+
+        def find(a):
+            while parent[a] != a:
+                parent[a] = parent[parent[a]]
+                a = parent[a]
+            return a
+
+        for i in range(n):
+            for j in range(i + 1, n):
+                if lanes[i].category_id != lanes[j].category_id:
+                    continue
+                if find(i) == find(j):
+                    continue
+                if self._is_duplicate(lanes[i], lanes[j]):
+                    parent[find(j)] = find(i)
+
+        groups = {}
+        for i in range(n):
+            groups.setdefault(find(i), []).append(lanes[i])
+
+        deduped = []
+        for members in groups.values():
+            deduped.append(members[0] if len(members) == 1 else self._merge_group(members))
+        return deduped
+
+    def _is_duplicate(self, a: Lane, b: Lane) -> bool:
+        """두 LineString이 거의 같은 위치에 겹쳐 그려진 복제인지 판정.
+        한쪽 점들의 dup_ratio 이상이 상대 본체에서 dup_dist 이내이면 복제로 본다."""
+        d_ab = self._point_to_polyline_dist(a.points, b.points)
+        d_ba = self._point_to_polyline_dist(b.points, a.points)
+        cover_ab = float(np.mean(d_ab < self.dup_dist))
+        cover_ba = float(np.mean(d_ba < self.dup_dist))
+        return max(cover_ab, cover_ba) >= self.dup_ratio
 
     # ------------------------------------------------------------------ #
     # 병합
@@ -474,14 +527,70 @@ class MergeAnnotator:
               f'categories={len(categories)})')
 
 
+def _split_coco_path(split: str) -> str:
+    """split 별 merged_annotations_{split}.json 경로를 만든다."""
+    root, ext = os.path.splitext(cfg.MERGED_COCO_PATH)
+    return f'{root}_{split}{ext}'
+
+
+def count_class_instances(splits: List[str], csv_path: str):
+    """split 별 merged json을 읽어 클래스별 개체수를 계산하고 csv로 저장한다.
+
+    행: 클래스(이름), 열: split. 마지막에 합계 행/열을 추가한다."""
+    id2name = {c['id']: c['name'] for c in cfg.METAINFO}
+    # 평가에 쓰는 실제 차선 클래스(ignore 제외)만 행으로 사용
+    class_ids = [c['id'] for c in cfg.METAINFO if c['id'] != 0]
+
+    # counts[split][class_id]
+    counts = {sp: {cid: 0 for cid in class_ids} for sp in splits}
+    for sp in splits:
+        path = _split_coco_path(sp)
+        if not os.path.exists(path):
+            print(f'[count] {path} 없음 -> {sp} 건너뜀')
+            continue
+        with open(path, 'r') as f:
+            data = json.load(f)
+        for ann in data['annotations']:
+            cid = ann['category_id']
+            if cid in counts[sp]:
+                counts[sp][cid] += 1
+
+    os.makedirs(os.path.dirname(csv_path), exist_ok=True)
+    with open(csv_path, 'w') as f:
+        f.write('class_id,class_name,' + ','.join(splits) + ',total\n')
+        col_totals = {sp: 0 for sp in splits}
+        for cid in class_ids:
+            row = [counts[sp][cid] for sp in splits]
+            for sp in splits:
+                col_totals[sp] += counts[sp][cid]
+            f.write(f'{cid},{id2name[cid]},' + ','.join(map(str, row)) +
+                    f',{sum(row)}\n')
+        total_row = [col_totals[sp] for sp in splits]
+        f.write('-,total,' + ','.join(map(str, total_row)) +
+                f',{sum(total_row)}\n')
+    print(f'[count] 클래스별 개체수 csv 저장: {csv_path}')
+
+
 def main():
-    annotator = MergeAnnotator(
-        label_path=cfg.SEED_LABEL_PATH,
-        image_path=cfg.COCO_IMAGE_PATH,
-        compare_path=cfg.MERGE_COMPARE_PATH,
-        coco_path=cfg.MERGED_COCO_PATH,
-    )
-    annotator.run()
+    with open(cfg.DATASET_SPLIT_JSON, 'r') as f:
+        dataset = json.load(f)
+
+    # train, validation 두 split에 대해 같은 클래스 객체를 각각 만들어 처리한다.
+    splits = ['train', 'validation']
+    for split in splits:
+        annotator = MergeAnnotator(
+            split=split,
+            image_ids=sorted(dataset[split]),
+            label_path=cfg.SEED_LABEL_PATH,
+            image_path=os.path.join(cfg.COCO_ROOT, cfg.SPLIT_IMAGE_DIR[split]),
+            compare_path=os.path.join(cfg.MERGE_COMPARE_PATH, split),
+            coco_path=_split_coco_path(split),
+        )
+        annotator.run()
+
+    # 두 작업이 끝난 뒤 별도 함수로 클래스별 개체수를 계산해 csv로 저장한다.
+    csv_path = os.path.join(os.path.dirname(cfg.MERGED_COCO_PATH), 'class_counts.csv')
+    count_class_instances(splits, csv_path)
 
 
 if __name__ == '__main__':

@@ -6,7 +6,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import config as cfg
 
 
-class Table3Builder:
+class Table4Builder:
     ABLATION_PARAMS = ['merge_count', 'sample_strides', 'extend_lens']
     METRICS = ['instances', 'AP20', 'mIoU']
 
@@ -37,19 +37,19 @@ class Table3Builder:
 
     def _save(self, result, model_name):
         result[['merge_count', 'instances']] = result[['merge_count', 'instances']].astype(int)
-        result[['AP20', 'mIoU']] = result[['AP20', 'mIoU']].round(4)
+        result[['AP20', 'mIoU']] = (result[['AP20', 'mIoU']] * 100).round(2)  # % 단위로 변환
         os.makedirs(os.path.dirname(self.save_path), exist_ok=True)
         result.to_csv(self.save_path, index=False, encoding='utf-8')
         print(f"\nAblation Study — model: {model_name}")
         print(f"Saved to: {self.save_path}")
         print(result.to_string(index=False))
-        print('table 3 shape:', result.shape)
+        print('table 4 shape:', result.shape)
 
 
 def main():
     total_csv_path = os.path.join(cfg.RESULT_PATH, 'total_performance.csv')
-    save_path = os.path.join(cfg.RESULT_PATH, 'Tables', 'table_3.csv')
-    Table3Builder(total_csv_path, save_path).build()
+    save_path = os.path.join(cfg.RESULT_PATH, 'Tables', 'table_4.csv')
+    Table4Builder(total_csv_path, save_path).build()
 
 
 if __name__ == '__main__':

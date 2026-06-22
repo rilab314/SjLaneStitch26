@@ -82,6 +82,14 @@ class LineStringDetector:
 
         self._save_result_jsons(result_jsons)
 
+    def get_linestrings_for_image(self, file_name: str):
+        """Extract linestrings and image shape for a single validation image file."""
+        image, pred_img, anno_img = self._read_image(file_name)
+        self._img_shape = image.shape[:2]
+        self._id_count = self.id_offset
+        lines, _ = self.extract_lines(pred_img, file_name)
+        return lines, self._img_shape
+
     def _read_image(self, img_file: str):
         image = cv2.imread(img_file)
         # print('image file', img_file)
@@ -456,7 +464,18 @@ class LineStringDetector:
 
 
 def main():
-    line_detector = LineStringDetector(cfg.DATASET_PATH, cfg.MODEL_PATH, cfg.RESULT_PATH)
+    from util import find_best_pred_json_path
+    csv_path = os.path.join(cfg.RESULT_PATH, 'total_performance.csv')
+    model_name, _, _ = find_best_pred_json_path(csv_path)
+    
+    if model_name is None:
+        model_name = "internimage_large"
+        
+    model_dir = cfg.MODEL_PREFIX + model_name
+    model_type = "Internimage" if "internimage" in model_name.lower() else "mask2former"
+    model_path = os.path.join(cfg.DATA_ROOT, model_type, model_dir)
+    
+    line_detector = LineStringDetector(cfg.DATASET_PATH, model_path, cfg.RESULT_PATH)
     line_detector.detect_lines()
 
 

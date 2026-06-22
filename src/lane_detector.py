@@ -32,20 +32,21 @@ class LineStringDetector:
     short_length = 30
     num_merges = 3
 
-    def __init__(self, data_path: str, pred_path: str, result_path: str, thickness: int = 3, sample_stride: int = 10, extend_len: int = 20):
+    def __init__(self, data_path: str, pred_path: str, result_path: str, thickness: int = 3, sample_stride: int = 10, extend_len: int = 20, visualize: bool = True):
         self.thickness = thickness
         self.sample_stride = sample_stride
         self.extend_len = extend_len
         self._data_path = data_path
         self._pred_path = pred_path
         self._result_path = result_path
+        self._visualize = visualize  # False면 창 표시·시각화 콜라주 생략 (성능평가용 고속 모드)
         self._img_shape = (100, 100)
         self._palette = [info['color'][::-1] for info in cfg.METAINFO]
         # print('palette:', self._palette)
         self._id_count = 0
-        self._imshow_base = ImageShow('base images', columns=3, scale=0.8, enabled=True)
-        self._imshow_proc = ImageShow('processing images', columns=3, scale=0.8, enabled=True)
-        self._imshow_save = ImageShow('save images', columns=3, scale=0.5, enabled=True)
+        self._imshow_base = ImageShow('base images', columns=3, scale=0.8, enabled=visualize)
+        self._imshow_proc = ImageShow('processing images', columns=3, scale=0.8, enabled=visualize)
+        self._imshow_save = ImageShow('save images', columns=3, scale=0.5, enabled=visualize)
         self._exclude_classes = [0]
         # self.figure_path = '/media/humpback/435806fd-079f-4ba1-ad80-109c8f6e2ec0/Archive/Dataset/unzips/LaneDetector(copy)/ade20k/result/Figure'
         assert os.path.exists(self._data_path), f"data_path: {self._data_path} is not exists"
@@ -74,7 +75,8 @@ class LineStringDetector:
                 result_jsons[n] += self.convert_to_json(lines, image_id)
                 images_to_save[f'merge{n}'] = line_img
 
-            self._imshow_save.show_imgs(images_to_save, wait_ms=1)
+            if self._visualize:
+                self._imshow_save.show_imgs(images_to_save, wait_ms=1)
             # self.save_images(self._imshow_save.update_whole_image(), file_name)
             # self._imshow_proc.display(1)
             counts = ', '.join(f'merge{n}={len(result_jsons[n])}' for n in range(self.num_merges + 1))
@@ -95,8 +97,10 @@ class LineStringDetector:
         # print('image file', img_file)
         pred_file = img_file.replace(self._data_path, self._pred_path).replace('/images/validation/', '/prediction/')
         pred_img = cv2.imread(pred_file)
-        anno_file = img_file.replace('/images/', '/color_annotations/')
-        anno_img = cv2.imread(anno_file)
+        anno_img = None
+        if self._visualize:
+            anno_file = img_file.replace('/images/', '/color_annotations/')
+            anno_img = cv2.imread(anno_file)
         # images = {'image': image, 'GT_img': anno_img, 'pred_img': pred_img}
         # self._imshow_base.show_imgs(images)
         return image, pred_img, anno_img
@@ -114,9 +118,11 @@ class LineStringDetector:
             ext_lines = self._extend_lines(line_map, line_strings)
             line_string_list.extend(ext_lines)
             file_name = os.path.basename(file_name)
-        
-        line_img = np.zeros_like(pred_img)
-        line_img = self._draw_colored_lines(line_img, line_string_list)
+
+        line_img = None
+        if self._visualize:
+            line_img = np.zeros_like(pred_img)
+            line_img = self._draw_colored_lines(line_img, line_string_list)
         # self._imshow_proc.show(line_img, 'extracted lines')
         return line_string_list, line_img
     
@@ -131,8 +137,10 @@ class LineStringDetector:
             # print(f'[merge_lines] class_id={class_id}, src lines={len(class_line_strings)}, merged={len(merged_lines)}')
             dst_line_strings.extend(merged_lines)
 
-        line_img = np.zeros([self._img_shape[0], self._img_shape[1], 3], dtype=np.uint8)
-        line_img = self._draw_colored_lines(line_img, dst_line_strings)
+        line_img = None
+        if self._visualize:
+            line_img = np.zeros([self._img_shape[0], self._img_shape[1], 3], dtype=np.uint8)
+            line_img = self._draw_colored_lines(line_img, dst_line_strings)
         # self._imshow_proc.show(line_img, f'merged_lines_{iter}')
         return dst_line_strings, line_img
 

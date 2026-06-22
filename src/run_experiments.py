@@ -1,5 +1,6 @@
 import os
 import glob
+import argparse
 import pandas as pd
 
 import config as cfg
@@ -7,7 +8,7 @@ from lane_detector import LineStringDetector
 from evaluator import evaluate_all
 
 
-def run_experiments():
+def run_experiments(visualize=True):
     sample_strides = [5, 10]
     extend_lens = [20, 30, 40]
     thicknesses = 3
@@ -22,12 +23,12 @@ def run_experiments():
         model_name = os.path.basename(model_path)
         for s in sample_strides:
             for e in extend_lens:
-                run_single_experiment(model_path, model_name, thicknesses, s, e, coco_gt_json, label_path)
+                run_single_experiment(model_path, model_name, thicknesses, s, e, coco_gt_json, label_path, visualize)
 
     print("\nAll experiments completed.")
 
 
-def run_single_experiment(model_path, model_name, t, s, e, coco_gt_json, label_path):
+def run_single_experiment(model_path, model_name, t, s, e, coco_gt_json, label_path, visualize=True):
     param_name = f"thick={t},stride={s},extend={e}"
     result_path = os.path.join(cfg.RESULT_PATH, model_name, param_name)
     os.makedirs(result_path, exist_ok=True)
@@ -44,7 +45,8 @@ def run_single_experiment(model_path, model_name, t, s, e, coco_gt_json, label_p
         result_path=result_path,
         thickness=t,
         sample_stride=s,
-        extend_len=e
+        extend_len=e,
+        visualize=visualize
     )
     detector.detect_lines()
     evaluate_all(coco_gt_json, label_path, model_path, result_path)
@@ -106,7 +108,11 @@ def parse_single_csv(file_path):
 
 
 def main():
-    run_experiments()
+    parser = argparse.ArgumentParser(description='하이퍼파라미터 탐색 및 성능평가 실행')
+    parser.add_argument('--fast', action='store_true',
+                        help='창 표시·시각화 콜라주를 생략하고 성능평가만 빠르게 실행')
+    args = parser.parse_args()
+    run_experiments(visualize=not args.fast)
     find_best_model_and_params()
 
 

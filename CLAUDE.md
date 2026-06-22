@@ -32,6 +32,9 @@ python lane_detector.py
 # 모든 모델과 파라미터 조합으로 전체 하이퍼파라미터 탐색 실행
 python run_experiments.py
 
+# 창 표시·시각화 콜라주 생략하고 성능평가만 빠르게 실행 (고속 모드)
+python run_experiments.py --fast
+
 # 1. 테이블(Tables) 생성 스크립트 실행
 # 체크포인트를 로드하여 모델별 파라미터 개수를 계산하고 num_params.csv 생성
 python Table/num_params.py

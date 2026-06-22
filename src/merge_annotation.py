@@ -9,20 +9,19 @@ LineStringDetector(lane_detector.py)의 끝점 겹침 병합 아이디어를 참
 고가도로와 그 아래 교차도로처럼 서로 다른 객체가 교차할 수 있으므로
 끝점 확장선이 겹치는 것뿐 아니라 "방향이 반대"인 경우에만 병합한다.
 
-알고리즘 개요
-1. 각 이미지에 대응하는 json 파일을 불러온다.
-2. 각 LineString의 양 끝점을 기준으로 약 20px 확장(extrapolation)한다.
-   - 끝점에서 중심 방향으로 약 20px 떨어진 기준 노드를 찾는다(짧으면 더 가까이).
-   - (기준 노드 -> 끝점) 방향으로 끝점에서 바깥쪽으로 20px 확장한 점을 구한다.
-3. LineString마다 양쪽 끝의 (기준 노드 -> 확장 점) 선분을 768x768 바이너리 이미지에 그린다.
-4. 모든 바이너리 이미지를 비교하여 같은 클래스이면서 흰색이 겹치는 객체 쌍을 찾는다.
-5. 겹친 선분들의 방향이 반대(정규화 방향 벡터 dot < -0.5)인지 확인한다.
-6. 겹치고 방향이 반대인 LineString들을 통합(점 통합 후 순서 정렬)한다.
-7. 겹침이 없는 LineString은 그대로 사용한다.
-8. 적용 전/후 비교 이미지를 그려서 imshow로 보여주고 저장한다.
-9. 통합 결과를 COCO instance segmentation 스타일 json으로 저장한다.
+알고리즘 개요 (이미지별)
+1. json에서 LineString들을 Lane 리스트로 로드한다.
+2. dedup: 거의 같은 위치의 복제선(왕복 스트로크 등)은 union-find로 묶어 가장 긴 것만
+   남기고 나머지는 버린다(점을 섞지 않으므로 지그재그가 생기지 않음).
+3. trim(center_line 한정): 가장 긴 선을 기준으로, 짧은 선에서 기준선과 겹치는 구간을
+   Canny식 이중 임계(강 overlap_dist / 약 overlap_low)로 잘라낸다. 갈라지는 가지는
+   별도 선으로 남고 완전 겹침 복제는 사라진다.
+4. 끝점 병합: 각 선의 양 끝을 바깥쪽으로 extend_len 확장한 선분을 만들고, 같은 클래스이며
+   확장선분이 겹치고 + 외측 방향이 반대이고 + 정렬된 끝끼리 직렬로 잇는다. 본체가 나란히
+   달리는(평행 이중선) 쌍은 제외한다.
+5. 통합 결과를 COCO instance segmentation json으로 저장하고, 전/후 비교 이미지를 남긴다.
 
-개발 중에는 전체 데이터를 끝까지 처리하지 않고 약 1분간만 실행 후 종료한다.
+개발 중에는 dev_time_limit 으로 일부만 처리할 수 있다(None 이면 전체 처리).
 """
 
 import os
@@ -60,17 +59,23 @@ class Lane:
 
 
 class MergeAnnotator:
-    extend_len = 20      # 끝점 바깥쪽 확장 길이 (px)
+    extend_len = 10      # 끝점 바깥쪽 확장 길이 (px)
     ref_len = 20         # 끝점에서 안쪽 기준 노드까지의 길이 (px)
     seg_thickness = 5    # 겹침 검사용 확장 선분 두께
     overlap_thresh = 2   # 겹침으로 판정할 최소 픽셀 수
     dot_thresh = -0.5    # 방향이 반대라고 판정할 dot product 임계값
     align_thresh = 0.7   # 끝점 변위가 진행 방향과 정렬됐다고 볼 dot product 임계값(약 45도)
     align_eps = 2.0      # 두 끝점이 사실상 맞닿았다고 볼 거리(px)
-    parallel_dist = 12   # 두 본체가 '가깝다'고 볼 측면 거리(px)
-    parallel_ratio = 0.4 # 본체가 나란하다고 판정할, 가까운 점들의 비율
+    parallel_overlap = 0.5  # 본체가 나란하다고 판정할 종축(진행 방향) 겹침 비율(짧은 쪽 기준)
+    parallel_lateral = 30   # 평행 이중선으로 볼 최대 측면 간격(px). 이보다 멀면 곡선 연장으로 간주
     dup_dist = 3.0       # 두 LineString이 '겹친 복제'인지 볼 점-본체 거리(px)
     dup_ratio = 0.8      # 한 선의 점이 상대 본체에 겹친 비율 임계 (이 이상이면 복제)
+    trim_class_id = 1        # 겹침 정리(trim)를 적용할 클래스 (center_line). 진짜 이중선 보존을 위해 한정
+    trim_step = 3.0          # trim 대상 선의 균일 재샘플 간격(px). 불규칙 점간격을 정규화
+    overlap_dist = 6.0       # 갈라짐 강임계(px). 이보다 멀어진 구간을 '확실히 갈라짐'으로 본다(시드)
+    overlap_low = 3.0        # 갈라짐 약임계(px). hysteresis로 시드 구간을 이 거리까지 확장(시작부 복원)
+    min_free_len = 20.0      # 잘린 뒤 새 선으로 남길 최소 구간 길이(px)
+    bridge_gap = 10.0        # 짧은 겹침 단절을 free로 메우는(브리징) 최대 길이(px)
     mask_thickness = 3   # COCO 마스크 렌더링 두께
     dev_time_limit = None  # 개발 중 실행 제한 시간 (초). None 이면 전체 데이터셋 처리
 
@@ -127,10 +132,12 @@ class MergeAnnotator:
 
             # 끝점 병합 전에 겹친 복제(왕복 스트로크 등)를 먼저 하나로 정리한다.
             deduped = self._dedup_lanes(lanes)
-            for lane in deduped:
+            # 나란히 겹쳐 달리는 center_line은 긴 선을 기준으로 겹침 구간을 잘라낸다.
+            trimmed = self._trim_overlaps(deduped)
+            for lane in trimmed:
                 self._build_ends(lane)
 
-            merged = self._merge_lanes(deduped)
+            merged = self._merge_lanes(trimmed)
 
             total_before += len(lanes)
             total_after += len(merged)
@@ -231,24 +238,32 @@ class MergeAnnotator:
         선이 짧으면 도달 가능한 가장 먼 점(반대쪽 끝)을 사용한다."""
         seq = points if from_head else points[::-1]
         tip = seq[0].astype(np.float64)
-        acc = 0.0
-        ref = seq[-1].astype(np.float64)
-        for k in range(1, len(seq)):
-            acc += np.linalg.norm(seq[k] - seq[k - 1])
-            if acc >= target:
-                ref = seq[k].astype(np.float64)
-                break
-        return tip, ref
+        if len(seq) < 2:
+            return tip, seq[-1].astype(np.float64)
+        # 누적 호길이가 처음으로 target 이상이 되는 점이 기준 노드. 없으면 반대쪽 끝.
+        acc = np.cumsum(np.linalg.norm(np.diff(seq, axis=0), axis=1))
+        k = int(np.searchsorted(acc, target, side='left'))
+        ref = seq[k + 1] if k < len(acc) else seq[-1]
+        return tip, ref.astype(np.float64)
 
     def _rasterize_segment(self, p0: np.ndarray, p1: np.ndarray) -> Set[int]:
-        """(p0 -> p1) 선분을 바이너리 이미지에 그린 뒤 픽셀 인덱스 집합 반환."""
+        """(p0 -> p1) 선분을 그린 뒤 이미지 범위 안 픽셀 인덱스(y*W+x) 집합 반환.
+
+        전체 이미지가 아니라 선분 바운딩박스 크롭에만 그려서 메모리/시간을 줄인다.
+        크롭 밖 픽셀을 이미지 경계로 필터링하므로 전체 이미지에 그린 것과 결과가 동일하다."""
         h, w = self._img_shape
-        img = np.zeros((h, w), dtype=np.uint8)
-        a = (int(round(p0[0])), int(round(p0[1])))
-        b = (int(round(p1[0])), int(round(p1[1])))
-        cv2.line(img, a, b, color=255, thickness=self.seg_thickness)
+        ax, ay = int(round(p0[0])), int(round(p0[1]))
+        bx, by = int(round(p1[0])), int(round(p1[1]))
+        pad = self.seg_thickness  # 두께가 선분 양옆으로 번지는 만큼 여유
+        x0, y0 = min(ax, bx) - pad, min(ay, by) - pad
+        cw = max(ax, bx) + pad - x0 + 1
+        ch = max(ay, by) + pad - y0 + 1
+        img = np.zeros((ch, cw), dtype=np.uint8)
+        cv2.line(img, (ax - x0, ay - y0), (bx - x0, by - y0), color=255, thickness=self.seg_thickness)
         ys, xs = np.nonzero(img)
-        return set((ys * w + xs).tolist())
+        gx, gy = xs + x0, ys + y0
+        inb = (gx >= 0) & (gx < w) & (gy >= 0) & (gy < h)
+        return set((gy[inb] * w + gx[inb]).tolist())
 
     # ------------------------------------------------------------------ #
     # 중복 제거 (dedup) - 끝점 병합 이전 단계
@@ -263,12 +278,7 @@ class MergeAnnotator:
         간격이 큰 진짜 이중선(예: 이중 중앙선)은 dup_dist(작음)에 걸리지 않아 보존된다."""
         n = len(lanes)
         parent = list(range(n))
-
-        def find(a):
-            while parent[a] != a:
-                parent[a] = parent[parent[a]]
-                a = parent[a]
-            return a
+        find = self._make_find(parent)
 
         for i in range(n):
             for j in range(i + 1, n):
@@ -283,9 +293,11 @@ class MergeAnnotator:
         for i in range(n):
             groups.setdefault(find(i), []).append(lanes[i])
 
+        # 복제는 거의 같은 위치의 동일 선이므로 NN으로 합치면(점 엮임) 지그재그가 생긴다.
+        # 점을 섞지 않고 가장 긴 대표선만 남기고 나머지는 버린다.
         deduped = []
         for members in groups.values():
-            deduped.append(members[0] if len(members) == 1 else self._merge_group(members))
+            deduped.append(max(members, key=lambda m: self._arc_length(m.points)))
         return deduped
 
     def _is_duplicate(self, a: Lane, b: Lane) -> bool:
@@ -305,12 +317,7 @@ class MergeAnnotator:
         parent = list(range(n))
         members = {i: [i] for i in range(n)}
         par_cache = {}
-
-        def find(a):
-            while parent[a] != a:
-                parent[a] = parent[parent[a]]
-                a = parent[a]
-            return a
+        find = self._make_find(parent)
 
         def parallel(i, j):
             key = (i, j) if i < j else (j, i)
@@ -347,12 +354,136 @@ class MergeAnnotator:
             groups.setdefault(find(i), []).append(lanes[i])
 
         merged = []
-        for members in groups.values():
-            if len(members) == 1:
-                merged.append(members[0])
+        for group in groups.values():
+            if len(group) == 1:
+                merged.append(group[0])
             else:
-                merged.append(self._merge_group(members))
+                merged.append(self._merge_group(group))
+
         return merged
+
+    # ------------------------------------------------------------------ #
+    # 평행 겹침 trim - 겹치는 구간을 잘라 기준선/조각으로 분리
+    # ------------------------------------------------------------------ #
+    def _trim_overlaps(self, lanes: List[Lane]) -> List[Lane]:
+        """겹쳐 달리는 center_line을 정리한다.
+
+        더 긴 선을 기준선으로 그대로 두고, 짧은 선에서 기준선과 겹치는(측면거리
+        overlap_dist 이내) 구간을 잘라낸다. 남은(겹치지 않는) 구간만 새 선으로
+        등록하므로, 부분적으로 갈라지는 가지는 별도 선으로 남고 완전히 겹치는
+        복제는 사라진다. 이후 끝-끝 병합이 기준선 범위 밖 조각을 직렬로 잇는다.
+
+        진짜 이중 마킹 보존을 위해 center_line(trim_class_id)에만 적용한다.
+        점을 평균내지 않고 잘라내기만 하므로 지그재그가 생기지 않는다."""
+        targets = [l for l in lanes if l.category_id == self.trim_class_id]
+        others = [l for l in lanes if l.category_id != self.trim_class_id]
+        # 긴 선부터 기준선으로 확정해 나간다.
+        targets.sort(key=lambda l: self._arc_length(l.points), reverse=True)
+
+        kept: List[Lane] = []
+        for lane in targets:
+            for piece in self._subtract_lane(lane.points, kept):
+                kept.append(Lane(idx=lane.idx, category=lane.category,
+                                 category_id=lane.category_id, points=piece))
+        return others + kept
+
+    def _subtract_lane(self, pts: np.ndarray, refs: List[Lane]) -> List[np.ndarray]:
+        """pts에서 기준선(refs) 중 하나라도 측면거리 overlap_dist 이내인 점을 '겹침'으로
+        보고 제거한 뒤, 남은 연속 구간들을 점 배열 리스트로 반환한다.
+        짧은 겹침 단절(bridge_gap 이하)은 free로 메워(브리징) 과분할을 막는다."""
+        pts = np.asarray(pts, dtype=np.float64)
+        if len(pts) < 2:
+            return []
+        if not refs:
+            return [pts]  # 기준선은 원본 점 그대로 보존
+        # 불규칙 점간격을 정규화해 bridge_gap/min_free_len이 일관되게 동작하도록 재샘플
+        pts = self._resample_polyline(pts, self.trim_step)
+
+        dmin = np.full(len(pts), np.inf)
+        for r in refs:
+            dmin = np.minimum(dmin, self._point_to_polyline_dist(pts, r.points))
+        free = self._hysteresis_free(dmin)
+        free = self._bridge_runs(pts, free)
+
+        pieces = []
+        for s, e in self._true_runs(free):
+            run = pts[s:e]
+            if len(run) >= 2 and self._arc_length(run) >= self.min_free_len:
+                pieces.append(run)
+        return pieces
+
+    def _hysteresis_free(self, dmin: np.ndarray) -> np.ndarray:
+        """Canny 이중 임계 방식으로 free(겹치지 않음) 마스크를 만든다.
+
+        강임계(overlap_dist) 초과를 '확실히 갈라짐' 시드로 보고, 약임계(overlap_low)
+        초과로 연결된 구간이 시드를 하나라도 포함하면 그 구간 전체를 free로 확장한다.
+        이렇게 하면 6px에서 딱 자르지 않고 갈라짐 시작부(3~6px)까지 살린다."""
+        strong = dmin > self.overlap_dist
+        weak = dmin > self.overlap_low
+        free = np.zeros(len(dmin), dtype=bool)
+        for s, e in self._true_runs(weak):
+            if strong[s:e].any():   # 약임계 연결 구간에 강임계 시드가 있으면 전체 채택
+                free[s:e] = True
+        return free
+
+    def _bridge_runs(self, pts: np.ndarray, free: np.ndarray) -> np.ndarray:
+        """free(겹치지 않음) 구간 사이의 짧은 겹침 단절(호길이 bridge_gap 이하)을 free로
+        메운다. 점 하나가 우연히 임계 안/밖으로 튀어 free 구간이 쪼개지는 것을 막는다.
+        선두/말미의 겹침은 실제 trim 대상이므로 메우지 않는다(내부 단절만 처리)."""
+        free = free.copy()
+        n = len(free)
+        for s, e in self._true_runs(~free):  # 겹침(False) 런들
+            if 0 < s and e < n and self._arc_length(pts[s - 1:e + 1]) <= self.bridge_gap:
+                free[s:e] = True  # 양쪽이 free로 둘러싸인 내부 단절만 메움
+        return free
+
+    @staticmethod
+    def _make_find(parent: List[int]):
+        """경로 압축 union-find의 find 함수를 만들어 반환한다."""
+        def find(a):
+            while parent[a] != a:
+                parent[a] = parent[parent[a]]
+                a = parent[a]
+            return a
+        return find
+
+    @staticmethod
+    def _true_runs(mask: np.ndarray):
+        """불리언 배열에서 연속된 True 구간의 (start, end) 리스트(end 배타적)를 반환한다."""
+        m = np.asarray(mask)
+        if m.size == 0:
+            return []
+        d = np.diff(m.astype(np.int8))
+        starts = (np.flatnonzero(d == 1) + 1).tolist()
+        ends = (np.flatnonzero(d == -1) + 1).tolist()
+        if m[0]:
+            starts.insert(0, 0)
+        if m[-1]:
+            ends.append(m.size)
+        return list(zip(starts, ends))
+
+    @staticmethod
+    def _arc_length(points: np.ndarray) -> float:
+        if len(points) < 2:
+            return 0.0
+        return float(np.linalg.norm(np.diff(np.asarray(points, float), axis=0), axis=1).sum())
+
+    @staticmethod
+    def _resample_polyline(points: np.ndarray, step: float) -> np.ndarray:
+        """순서가 있는 폴리라인을 호길이 균일 간격(step)으로 재샘플한다."""
+        pts = np.asarray(points, dtype=np.float64)
+        if len(pts) < 2:
+            return pts
+        seglen = np.linalg.norm(np.diff(pts, axis=0), axis=1)
+        cum = np.concatenate([[0.0], np.cumsum(seglen)])
+        total = float(cum[-1])
+        if total < 1e-6:
+            return pts[:1]
+        m = max(int(np.floor(total / step)), 1)
+        s = np.linspace(0.0, total, m + 1)
+        x = np.interp(s, cum, pts[:, 0])
+        y = np.interp(s, cum, pts[:, 1])
+        return np.stack([x, y], axis=1)
 
     def _should_merge(self, a: Lane, b: Lane) -> bool:
         """두 LineString이 끝과 끝으로 이어지면 True.
@@ -381,17 +512,34 @@ class MergeAnnotator:
         return False
 
     def _bodies_parallel(self, a: Lane, b: Lane) -> bool:
-        """두 LineString의 본체가 나란히 가까이 달리는지 검사.
+        """두 LineString의 본체가 나란히(평행 이중선) 달리는지 검사.
 
-        한쪽 점들이 다른 쪽 본체(polyline)에서 parallel_dist 이내인 비율이
-        parallel_ratio 를 넘으면 평행한 이중선으로 보고 병합을 막는다.
-        끝과 끝으로 이어지는 경우는 접점 부근만 가깝고 본체 대부분은 멀어
-        비율이 낮으므로 구분된다."""
-        d_ba = self._point_to_polyline_dist(b.points, a.points)
-        d_ab = self._point_to_polyline_dist(a.points, b.points)
-        ratio_b = float(np.mean(d_ba < self.parallel_dist))
-        ratio_a = float(np.mean(d_ab < self.parallel_dist))
-        return max(ratio_a, ratio_b) > self.parallel_ratio
+        진행 방향(공통 주축)으로 두 본체를 투영했을 때 종축 구간이 크게 겹치면
+        평행 이중선으로 보고 병합을 막는다.
+        - 끝과 끝으로 이어지는 연장(collinear)은 서로 다른 종축 구간을 차지하므로
+          겹침 비율이 0에 가까워 구분된다. (점 개수/길이에 무관하게 안정적)
+        - 측면 간격이 너무 크면(곡선 연장 등으로 주축이 비스듬한 경우) 평행으로
+          보지 않는다.
+
+        이전의 '가까운 점 비율' 방식은 짧은 분절이 끝점에서 만나면 접점 근방
+        점들이 비율을 끌어올려 연장을 평행으로 오판했다(특히 점 2~3개짜리 분절)."""
+        pa, pb = a.points, b.points
+        allp = np.vstack([pa, pb])
+        center = allp.mean(axis=0)
+        # 두 본체를 함께 설명하는 주축(=진행 방향)과 수직축을 SVD로 구한다.
+        _, _, vt = np.linalg.svd(allp - center)
+        axis, perp = vt[0], vt[1]
+
+        proj_a, proj_b = (pa - center) @ axis, (pb - center) @ axis
+        amin, amax = proj_a.min(), proj_a.max()
+        bmin, bmax = proj_b.min(), proj_b.max()
+        inter = max(0.0, min(amax, bmax) - max(amin, bmin))
+        shorter = min(amax - amin, bmax - bmin)
+        overlap = inter / shorter if shorter > 1e-6 else 0.0
+
+        lateral = abs(float(np.median((pa - center) @ perp) -
+                          np.median((pb - center) @ perp)))
+        return overlap > self.parallel_overlap and lateral < self.parallel_lateral
 
     @staticmethod
     def _point_to_polyline_dist(pts: np.ndarray, poly: np.ndarray) -> np.ndarray:
@@ -575,8 +723,8 @@ def main():
     with open(cfg.DATASET_SPLIT_JSON, 'r') as f:
         dataset = json.load(f)
 
-    # train, validation 두 split에 대해 같은 클래스 객체를 각각 만들어 처리한다.
-    splits = ['train', 'validation']
+    # validation을 먼저 처리한 뒤 train을 처리한다.
+    splits = ['validation', 'train']
     for split in splits:
         annotator = MergeAnnotator(
             split=split,

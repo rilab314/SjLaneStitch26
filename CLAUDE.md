@@ -39,11 +39,11 @@ python Table/num_params.py
 # 단일 실행 결과 평가 및 table_1.csv 생성
 python Table/table_1.py
 
-# 최적 모델/파라미터를 찾고 table_2.csv (클래스별 지표) 생성
+# 최적 모델/파라미터를 찾고 table_2.csv (클래스별 지표)와 table_3.csv (클래스별 심화 지표) 생성
 python Table/table_2.py
 
-# 논문용 Ablation Study 테이블 (table_3.csv) 생성
-python Table/table_3.py
+# 논문용 Ablation Study 테이블 (table_4.csv) 생성
+python Table/table_4.py
 
 # 2. 그림(Figures) 생성 스크립트 실행
 # 최적 예측 JSON 결과를 기반으로 validation 이미지에 개별 마스크 시각화 이미지 생성 (Figure_1)
@@ -119,7 +119,8 @@ coco_pred_instances_merge{1,2,3}.json            # 단계별 병합 결과 (merg
 num_params.py → num_params.csv                   # 모델별 파라미터 수
 table_1.py    → table_1.csv                      # 알고리즘 변형별 성능 (AP, mIoU)
 table_2.py    → table_2.csv                      # 차선 클래스별 성능 (AP20, mIoU)
-table_3.py    → table_3.csv                      # Ablation study
+              → table_3.csv                      # 차선 클래스별 심화 지표 (인스턴스 매칭 분석)
+table_4.py    → table_4.csv                      # Ablation study
         ↓
 [Figure 생성]
 figure_1.py, figure_1_fin.py → Figure_1/, figure1.jpg  # 예측 마스크 개별/최종 비교 콜라주
@@ -173,7 +174,8 @@ DATA_ROOT/
     ├─ Tables/
     │    ├─ table_1.csv
     │    ├─ table_2.csv
-    │    └─ table_3.csv
+    │    ├─ table_3.csv
+    │    └─ table_4.csv
     └─ Figure/
          ├─ Figure_1/                     # figure_1.py 출력 (개별 시각화 마스크)
          ├─ Figure_2/                     # figure_2.py 출력 (2x2 콜라주 [이미지명].jpg)

@@ -17,7 +17,7 @@ import polyline_merge as pm
 
 
 @dataclass
-class LineString:
+class Strand:
     id: int
     peak: Tuple[int, int]
     class_id: int
@@ -27,7 +27,7 @@ class LineString:
     length: float = 0  # 선의 길이 (유클리드 누적거리)
 
 
-class LineStringDetector:
+class LaneStitcher:
     id_offset = 10  # peak ID의 최소 오프셋
     overlap_thresh = 2  # 겹치는 픽셀 수
     short_length = 30
@@ -134,7 +134,7 @@ class LineStringDetector:
         # self._imshow_base.show_imgs(images)
         return image, pred_img, anno_img
     
-    def extract_lines(self, pred_img: np.ndarray, file_name=None) -> Tuple[List[LineString], np.ndarray]:
+    def extract_lines(self, pred_img: np.ndarray, file_name=None) -> Tuple[List[Strand], np.ndarray]:
         line_string_list = []
 
         debug_img = np.full_like(pred_img, 255)
@@ -155,7 +155,7 @@ class LineStringDetector:
         # self._imshow_proc.show(line_img, 'extracted lines')
         return line_string_list, line_img
     
-    def merge_lines(self, src_line_strings: List[LineString], iter: int) -> Tuple[List[LineString], np.ndarray]:
+    def merge_lines(self, src_line_strings: List[Strand], iter: int) -> Tuple[List[Strand], np.ndarray]:
         dst_line_strings = []
         # print(f'=========== [merge_lines] iter={iter}, src_line_strings: {len(src_line_strings)}')
         for class_id, color in enumerate(self._palette):
@@ -203,12 +203,12 @@ class LineStringDetector:
 
             # 결과를 line_map에 누적 (겹치는 영역은 덮어쓰기)
             line_map[line_img > 0] = fill_value
-            line_strings.append(LineString(id=fill_value, class_id=class_id, peak=(x, y)))
+            line_strings.append(Strand(id=fill_value, class_id=class_id, peak=(x, y)))
             fill_value += 1
 
         return line_map.astype(np.uint8), line_strings
 
-    def _extend_lines(self, line_map: np.ndarray, line_strings: List[LineString]) -> List[LineString]:
+    def _extend_lines(self, line_map: np.ndarray, line_strings: List[Strand]) -> List[Strand]:
         # print(f'----- [extend_lines] -----')
         id_list = np.unique(line_map)
         id_list = id_list[id_list >= self.id_offset]
@@ -273,7 +273,7 @@ class LineStringDetector:
             points = points[distances >= stride]
         return sorted_points
 
-    def _extrapolate_line(self, line_string: LineString, extend_len: int, stride: int) -> LineString:
+    def _extrapolate_line(self, line_string: Strand, extend_len: int, stride: int) -> Strand:
         points = line_string.points  # (N,2) 배열
         N = len(points)
         n_ext = extend_len // stride
@@ -299,7 +299,7 @@ class LineStringDetector:
         direction = direction / norm
         return np.array([tip + direction * stride * i for i in range(1, n_ext + 1)])
 
-    def _clean_lines(self, lines: List[LineString]) -> List[LineString]:
+    def _clean_lines(self, lines: List[Strand]) -> List[Strand]:
         """추출된 선들을 공유 모듈로 정리한다(merge_annotation과 동일 기조).
 
         - 클래스별 복제선은 가장 긴 대표만 남김(dedup_keep_longest) → 점 섞임 없음.
@@ -321,7 +321,7 @@ class LineStringDetector:
                         overlap_high=self.overlap_dist, overlap_low=self.overlap_low,
                         min_free_len=self.min_free_len, bridge_gap=self.bridge_gap, step=self.trim_step):
                     base = kept[src_i]
-                    cleaned.append(LineString(id=base.id, peak=base.peak, class_id=cid,
+                    cleaned.append(Strand(id=base.id, peak=base.peak, class_id=cid,
                                               points=np.rint(pts).astype(np.int32),
                                               length=pm.arc_length(pts)))
             else:
@@ -336,7 +336,7 @@ class LineStringDetector:
             out.append(self._extrapolate_line(l, self.extend_len, self.sample_stride))
         return out
 
-    def _residual_pred(self, pred_img: np.ndarray, lines: List[LineString]) -> np.ndarray:
+    def _residual_pred(self, pred_img: np.ndarray, lines: List[Strand]) -> np.ndarray:
         """1차 추출 선들의 자취(두께 residual_remove_width)를 seg map에서 지운 잔여 예측 이미지.
         지워진 픽셀은 배경(0)으로 만들어 잔여 추출 시 같은 선이 다시 잡히지 않게 한다."""
         mask = np.zeros((self._img_shape[0], self._img_shape[1]), dtype=np.uint8)
@@ -349,7 +349,7 @@ class LineStringDetector:
         residual[mask > 0] = 0
         return residual
 
-    def _combine_dedup(self, lines: List[LineString]) -> List[LineString]:
+    def _combine_dedup(self, lines: List[Strand]) -> List[Strand]:
         """1차+잔여 선을 합친 뒤 클래스별 복제만 제거하고 id를 고유화한다(trim 재적용 안 함).
         잔여 추출에서 1차 선과 거의 겹친 찌꺼기 선이 잡히면 여기서 제거된다."""
         by_cls = {}
@@ -366,7 +366,7 @@ class LineStringDetector:
             out.append(self._extrapolate_line(l, self.extend_len, self.sample_stride))
         return out
 
-    def _smoothed_copies(self, lines: List[LineString]) -> List[LineString]:
+    def _smoothed_copies(self, lines: List[Strand]) -> List[Strand]:
         """점들을 이동평균으로 스무딩한 복사본을 만든다(원본 lines는 다음 병합용으로 보존).
         thinning/병합 경계에서 생기는 지그재그를 완화해 선을 반듯하게 편다."""
         out = []
@@ -375,11 +375,11 @@ class LineStringDetector:
                 out.append(l)
                 continue
             sp = pm.smooth_polyline(l.points, self.smooth_window, self.smooth_iters)
-            out.append(LineString(id=l.id, peak=l.peak, class_id=l.class_id,
+            out.append(Strand(id=l.id, peak=l.peak, class_id=l.class_id,
                                   points=np.rint(sp).astype(np.int32), length=l.length))
         return out
 
-    def _merge_lines_by_class(self, line_strings: List[LineString], iter_count: int = 0) -> List[LineString]:
+    def _merge_lines_by_class(self, line_strings: List[Strand], iter_count: int = 0) -> List[Strand]:
         """끝-끝으로 이어지는 선들을 직렬 연결로 병합한다(점 단위 NN 재정렬 안 함).
 
         후보쌍은 기존처럼 확장 끝선분 겹침(_find_overlap)으로 찾되, 평행 본체 쌍은
@@ -442,7 +442,7 @@ class LineStringDetector:
             out.append(self._extrapolate_line(base, self.extend_len, self.sample_stride))
         return out
 
-    def _find_overlap(self, line_strings: List[LineString], this_line: LineString) -> Set[int]:
+    def _find_overlap(self, line_strings: List[Strand], this_line: Strand) -> Set[int]:
         src_line_id = this_line.id
         if this_line.ext_points is None:
             return set()
@@ -477,7 +477,7 @@ class LineStringDetector:
         counts = ', '.join(f'{name}={len(data)}' for name, data in zip(names, result_jsons))
         print(f'FINAL instance counts: {counts}\n')
 
-    def _exclude_short_lines(self, line_strings: List[LineString]) -> Tuple[List[LineString], np.ndarray]:
+    def _exclude_short_lines(self, line_strings: List[Strand]) -> Tuple[List[Strand], np.ndarray]:
         filtered_line_strings = []
 
         # [디버깅] 입력된 라인 개수 출력
@@ -511,7 +511,7 @@ class LineStringDetector:
         line_img = self._draw_colored_lines(line_img, filtered_line_strings)
         return filtered_line_strings, line_img
 
-    def _draw_line_strings(self, line_strings: List[LineString], extend=False, color=None):
+    def _draw_line_strings(self, line_strings: List[Strand], extend=False, color=None):
         image = np.zeros((self._img_shape[0], self._img_shape[1], 3), dtype=np.uint8)
         for line in line_strings:
             if line.id is None or line.points is None:
@@ -524,7 +524,7 @@ class LineStringDetector:
             cv2.polylines(image, [pts], isClosed=False, color=line_color, thickness=3)
         return image
 
-    def _draw_single_line(self, line_string : LineString, thickness=None, extend=False):
+    def _draw_single_line(self, line_string : Strand, thickness=None, extend=False):
         image = np.zeros((self._img_shape[0], self._img_shape[1], 3), dtype=np.uint8)
         if line_string.id is None or line_string.points is None:
             return image
@@ -532,7 +532,7 @@ class LineStringDetector:
         cv2.polylines(image, [pts], isClosed=False, color=(line_string.id, line_string.id, line_string.id), thickness=thickness)
         return image
 
-    def _draw_colored_lines(self, pred_img, line_strings : List[LineString], extended=False, select=None):
+    def _draw_colored_lines(self, pred_img, line_strings : List[Strand], extended=False, select=None):
         image = pred_img.copy()
         for line in line_strings:
             if line.id is None:
@@ -563,7 +563,7 @@ class LineStringDetector:
         colorized = bgr[line_map]
         return colorized
 
-    def convert_to_json(self, line_strings: List[LineString], image_id: str):
+    def convert_to_json(self, line_strings: List[Strand], image_id: str):
         pred_json = []
         for line in line_strings:
             mask = self._draw_single_line(line, self.thickness)
@@ -601,7 +601,7 @@ def main():
     model_type = "Internimage" if "internimage" in model_name.lower() else "mask2former"
     model_path = os.path.join(cfg.DATA_ROOT, model_type, model_dir)
     
-    line_detector = LineStringDetector(cfg.DATASET_PATH, model_path, cfg.RESULT_PATH)
+    line_detector = LaneStitcher(cfg.DATASET_PATH, model_path, cfg.RESULT_PATH)
     line_detector.detect_lines()
 
 

@@ -14,7 +14,7 @@ for path in [project_root, src_dir, backup_dir]:
         sys.path.append(path)
 
 import src.config as cfg
-from src.lane_detector import LineStringDetector
+from src.lane_stitcher import LaneStitcher
 from src.util import find_best_pred_json_path
 
 def main():
@@ -67,7 +67,7 @@ def main():
     s = int(params.get('stride', 10))
     e = int(params.get('extend', 20))
 
-    detector = LineStringDetector(
+    detector = LaneStitcher(
         cfg.DATASET_PATH, 
         model_path, 
         cfg.RESULT_PATH,
@@ -84,7 +84,7 @@ def main():
         if not os.path.exists(img_file):
             continue
 
-        # Extract LineStrings before merge
+        # Extract strands before merge
         lines, img_shape = detector.get_linestrings_for_image(img_file)
         h, w = img_shape
 

@@ -2,15 +2,15 @@
 분리된 차선 annotation 병합 (merge_annotation)
 
 위성영상 차선 annotation(json)에는 그림상으로는 하나의 차선이지만
-여러 개의 LineString 객체로 분리되어 저장된 경우가 있다.
-이 스크립트는 분리된 LineString들을 연결하여 통합된 차선 객체로 만든다.
+여러 개의 polyline 객체로 분리되어 저장된 경우가 있다.
+이 스크립트는 분리된 polyline들을 연결하여 통합된 차선 객체로 만든다.
 
-LineStringDetector(lane_detector.py)의 끝점 겹침 병합 아이디어를 참고하되,
+LaneStitcher(lane_stitcher.py)의 끝점 겹침 병합 아이디어를 참고하되,
 고가도로와 그 아래 교차도로처럼 서로 다른 객체가 교차할 수 있으므로
 끝점 확장선이 겹치는 것뿐 아니라 "방향이 반대"인 경우에만 병합한다.
 
 알고리즘 개요 (이미지별)
-1. json에서 LineString들을 Lane 리스트로 로드한다.
+1. json에서 polyline들을 Lane 리스트로 로드한다.
 2. dedup: 거의 같은 위치의 복제선(왕복 스트로크 등)은 union-find로 묶어 가장 긴 것만
    남기고 나머지는 버린다(점을 섞지 않으므로 지그재그가 생기지 않음).
 3. trim(center_line 한정): 가장 긴 선을 기준으로, 짧은 선에서 기준선과 겹치는 구간을
@@ -41,7 +41,7 @@ import polyline_merge as pm
 
 @dataclass
 class EndSeg:
-    """LineString 한쪽 끝의 확장 선분 정보."""
+    """polyline 한쪽 끝의 확장 선분 정보."""
     tip: np.ndarray           # 끝점 (x, y)
     ref: np.ndarray           # 중심 방향 기준 노드
     ext: np.ndarray           # 바깥쪽으로 확장된 점
@@ -51,7 +51,7 @@ class EndSeg:
 
 @dataclass
 class Lane:
-    """하나의 차선 LineString 인스턴스."""
+    """하나의 차선 polyline 인스턴스."""
     idx: int
     category: str
     category_id: int
@@ -69,7 +69,7 @@ class MergeAnnotator:
     align_eps = 2.0      # 두 끝점이 사실상 맞닿았다고 볼 거리(px)
     parallel_overlap = 0.5  # 본체가 나란하다고 판정할 종축(진행 방향) 겹침 비율(짧은 쪽 기준)
     parallel_lateral = 30   # 평행 이중선으로 볼 최대 측면 간격(px). 이보다 멀면 곡선 연장으로 간주
-    dup_dist = 3.0       # 두 LineString이 '겹친 복제'인지 볼 점-본체 거리(px)
+    dup_dist = 3.0       # 두 polyline이 '겹친 복제'인지 볼 점-본체 거리(px)
     dup_ratio = 0.8      # 한 선의 점이 상대 본체에 겹친 비율 임계 (이 이상이면 복제)
     trim_class_id = 1        # 겹침 정리(trim)를 적용할 클래스 (center_line). 진짜 이중선 보존을 위해 한정
     trim_step = 3.0          # trim 대상 선의 균일 재샘플 간격(px). 불규칙 점간격을 정규화
@@ -270,10 +270,10 @@ class MergeAnnotator:
     # 중복 제거 (dedup) - 끝점 병합 이전 단계
     # ------------------------------------------------------------------ #
     def _dedup_lanes(self, lanes: List[Lane]) -> List[Lane]:
-        """같은 클래스이면서 본체가 거의 일치하는(겹친 복제) LineString들을 하나로 합친다.
+        """같은 클래스이면서 본체가 거의 일치하는(겹친 복제) polyline들을 하나로 합친다.
 
         SEED 원본은 한 마킹을 정/역방향 왕복 스트로크 등 거의 동일한 위치의
-        여러 LineString으로 저장한 경우가 많다(특히 u_turn_zone_line).
+        여러 polyline으로 저장한 경우가 많다(특히 u_turn_zone_line).
         _bodies_parallel 가드는 떨어진 평행 이중선과 겹친 복제를 구분하지 못해
         이들을 끝점 병합으로 합치지 못하므로, 끝점 병합 전에 별도로 정리한다.
         간격이 큰 진짜 이중선(예: 이중 중앙선)은 dup_dist(작음)에 걸리지 않아 보존된다."""
@@ -397,7 +397,7 @@ class MergeAnnotator:
         return pm.arc_length(points)
 
     def _should_merge(self, a: Lane, b: Lane) -> bool:
-        """두 LineString이 끝과 끝으로 이어지면 True.
+        """두 polyline이 끝과 끝으로 이어지면 True.
 
         조건: 확장선분이 겹치고(겹침), 두 끝의 외측 방향이 반대이며(방향),
         두 끝점을 잇는 변위가 진행 방향과 같은 축으로 정렬되어야 한다(정렬).
@@ -426,7 +426,7 @@ class MergeAnnotator:
         return pm.bodies_parallel(a.points, b.points, self.parallel_overlap, self.parallel_lateral)
 
     def _merge_group(self, members: List[Lane]) -> Lane:
-        """여러 LineString의 점들을 통합한 뒤 순서대로 정렬한다."""
+        """여러 polyline의 점들을 통합한 뒤 순서대로 정렬한다."""
         all_points = np.vstack([m.points for m in members])
         ordered = self._order_points(all_points, members)
         base = members[0]
@@ -503,7 +503,7 @@ class MergeAnnotator:
     # COCO 출력
     # ------------------------------------------------------------------ #
     def _lane_to_annotation(self, lane: Lane, image_id: str):
-        """LineString을 두께 3으로 그린 영역을 RLE segmentation으로 저장.
+        """polyline을 두께 3으로 그린 영역을 RLE segmentation으로 저장.
         GT merged_annotations.json과 동일하게 image_id/category_id/segmentation/score만 담는다."""
         h, w = self._img_shape
         mask = np.zeros((h, w), dtype=np.uint8)

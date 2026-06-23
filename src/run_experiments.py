@@ -4,7 +4,7 @@ import argparse
 import pandas as pd
 
 import config as cfg
-from lane_detector import LineStringDetector
+from lane_stitcher import LaneStitcher
 from evaluator import evaluate_all, evaluate_coco_ap, _filename_to_merge_count
 
 
@@ -74,7 +74,7 @@ def run_single_experiment(model_path, model_name, t, s, e, tp, coco_gt_json, lab
     print(f"         Result Path = {result_path}")
     print('='*80)
 
-    detector = LineStringDetector(
+    detector = LaneStitcher(
         data_path=cfg.DATASET_PATH,
         pred_path=model_path,
         result_path=result_path,

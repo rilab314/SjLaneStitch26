@@ -13,7 +13,194 @@ from tqdm import tqdm
 
 from show_imgs import ImageShow
 import config as cfg
-import polyline_merge as pm
+
+
+# ====================================================================== #
+# 기하/병합 순수 함수 (구 polyline_merge 모듈을 lane_stitch가 자체 보유)
+# 순서가 있는 폴리라인(점 배열 (N,2))에 대한 trim(겹침 제거)/직렬연결 유틸.
+# ====================================================================== #
+def arc_length(points: np.ndarray) -> float:
+    if len(points) < 2:
+        return 0.0
+    return float(np.linalg.norm(np.diff(np.asarray(points, float), axis=0), axis=1).sum())
+
+
+def resample_polyline(points: np.ndarray, step: float) -> np.ndarray:
+    """순서가 있는 폴리라인을 호길이 균일 간격(step)으로 재샘플한다."""
+    pts = np.asarray(points, dtype=np.float64)
+    if len(pts) < 2:
+        return pts
+    seglen = np.linalg.norm(np.diff(pts, axis=0), axis=1)
+    cum = np.concatenate([[0.0], np.cumsum(seglen)])
+    total = float(cum[-1])
+    if total < 1e-6:
+        return pts[:1]
+    m = max(int(np.floor(total / step)), 1)
+    s = np.linspace(0.0, total, m + 1)
+    x = np.interp(s, cum, pts[:, 0])
+    y = np.interp(s, cum, pts[:, 1])
+    return np.stack([x, y], axis=1)
+
+
+def smooth_polyline(points: np.ndarray, window: int = 5, iterations: int = 1) -> np.ndarray:
+    """폴리라인 점들을 이동평균으로 평활화한다(끝점은 고정)."""
+    pts = np.asarray(points, dtype=np.float64)
+    n = len(pts)
+    if n <= 2 or window < 3:
+        return pts
+    w = min(window, n - 1 if n % 2 == 0 else n)
+    if w % 2 == 0:
+        w -= 1
+    if w < 3:
+        return pts
+    half = w // 2
+    kernel = np.ones(w) / w
+    out = pts.copy()
+    for _ in range(max(1, iterations)):
+        padded = np.pad(out, ((half, half), (0, 0)), mode='edge')
+        sx = np.convolve(padded[:, 0], kernel, mode='valid')
+        sy = np.convolve(padded[:, 1], kernel, mode='valid')
+        out = np.stack([sx, sy], axis=1)
+        out[0], out[-1] = pts[0], pts[-1]  # 끝점 고정
+    return out
+
+
+def true_runs(mask: np.ndarray):
+    """불리언 배열에서 연속된 True 구간의 (start, end) 리스트(end 배타적)를 반환한다."""
+    m = np.asarray(mask)
+    if m.size == 0:
+        return []
+    d = np.diff(m.astype(np.int8))
+    starts = (np.flatnonzero(d == 1) + 1).tolist()
+    ends = (np.flatnonzero(d == -1) + 1).tolist()
+    if m[0]:
+        starts.insert(0, 0)
+    if m[-1]:
+        ends.append(m.size)
+    return list(zip(starts, ends))
+
+
+def make_find(parent):
+    """경로 압축 union-find의 find 함수를 만들어 반환한다."""
+    def find(a):
+        while parent[a] != a:
+            parent[a] = parent[parent[a]]
+            a = parent[a]
+        return a
+    return find
+
+
+def point_to_polyline_dist(pts: np.ndarray, poly: np.ndarray) -> np.ndarray:
+    """pts(M,2)의 각 점에서 polyline(N,2)까지의 최소 거리 (M,) 반환."""
+    if len(poly) < 2:
+        return np.full(len(pts), np.inf)
+    seg_a = poly[:-1]
+    seg_ab = poly[1:] - poly[:-1]
+    seg_len2 = np.sum(seg_ab ** 2, axis=1)
+    seg_len2[seg_len2 == 0] = 1e-9
+    rel = pts[:, None, :] - seg_a[None, :, :]
+    t = np.sum(rel * seg_ab[None, :, :], axis=2) / seg_len2[None, :]
+    t = np.clip(t, 0.0, 1.0)
+    proj = seg_a[None, :, :] + t[:, :, None] * seg_ab[None, :, :]
+    d = np.linalg.norm(pts[:, None, :] - proj, axis=2)
+    return d.min(axis=1)
+
+
+def bodies_parallel(a: np.ndarray, b: np.ndarray, overlap_thr: float, lateral_thr: float) -> bool:
+    """두 폴리라인 본체가 나란히(평행 이중선) 달리는지 검사."""
+    allp = np.vstack([a, b])
+    center = allp.mean(axis=0)
+    _, _, vt = np.linalg.svd(allp - center)
+    axis, perp = vt[0], vt[1]
+    proj_a, proj_b = (a - center) @ axis, (b - center) @ axis
+    amin, amax = proj_a.min(), proj_a.max()
+    bmin, bmax = proj_b.min(), proj_b.max()
+    inter = max(0.0, min(amax, bmax) - max(amin, bmin))
+    shorter = min(amax - amin, bmax - bmin)
+    overlap = inter / shorter if shorter > 1e-6 else 0.0
+    lateral = abs(float(np.median((a - center) @ perp) - np.median((b - center) @ perp)))
+    return overlap > overlap_thr and lateral < lateral_thr
+
+
+def hysteresis_free(dmin: np.ndarray, high: float, low: float) -> np.ndarray:
+    """Canny 이중 임계로 free(겹치지 않음) 마스크 생성."""
+    strong = dmin > high
+    weak = dmin > low
+    free = np.zeros(len(dmin), dtype=bool)
+    for s, e in true_runs(weak):
+        if strong[s:e].any():
+            free[s:e] = True
+    return free
+
+
+def bridge_runs(pts: np.ndarray, free: np.ndarray, bridge_gap: float) -> np.ndarray:
+    """free 구간 사이의 짧은 겹침 단절(호길이 bridge_gap 이하)을 free로 메운다(내부만)."""
+    free = free.copy()
+    n = len(free)
+    for s, e in true_runs(~free):
+        if 0 < s and e < n and arc_length(pts[s - 1:e + 1]) <= bridge_gap:
+            free[s:e] = True
+    return free
+
+
+def subtract_lane(pts, refs, *, overlap_high, overlap_low, min_free_len, bridge_gap, step):
+    """pts에서 기준선(refs) 중 하나라도 측면거리 이내인 점을 제거하고 남은 구간 리스트 반환."""
+    pts = np.asarray(pts, dtype=np.float64)
+    if len(pts) < 2:
+        return []
+    if not refs:
+        return [pts]
+    pts = resample_polyline(pts, step)
+    dmin = np.full(len(pts), np.inf)
+    for r in refs:
+        dmin = np.minimum(dmin, point_to_polyline_dist(pts, r))
+    free = hysteresis_free(dmin, overlap_high, overlap_low)
+    free = bridge_runs(pts, free, bridge_gap)
+    pieces = []
+    for s, e in true_runs(free):
+        run = pts[s:e]
+        if len(run) >= 2 and arc_length(run) >= min_free_len:
+            pieces.append(run)
+    return pieces
+
+
+def trim_overlaps(polys, *, overlap_high, overlap_low, min_free_len, bridge_gap, step):
+    """같은 클래스 폴리라인 리스트를 길이 내림차순으로 trim한다.
+    각 결과 조각을 (원본 인덱스, 점배열)로 반환해 호출측이 메타데이터를 매핑할 수 있게 한다."""
+    out = []
+    kept = []
+    for i in sorted(range(len(polys)), key=lambda k: arc_length(polys[k]), reverse=True):
+        for piece in subtract_lane(polys[i], kept, overlap_high=overlap_high,
+                                   overlap_low=overlap_low, min_free_len=min_free_len,
+                                   bridge_gap=bridge_gap, step=step):
+            kept.append(piece)
+            out.append((i, piece))
+    return out
+
+
+def concat_polylines_in_series(polys):
+    """끝-끝으로 이어지는 폴리라인들을 점이 아니라 폴리라인 단위로 체이닝해 한 줄로 잇는다."""
+    polys = [np.asarray(p, dtype=np.float64) for p in polys if len(p) >= 1]
+    if len(polys) == 1:
+        return polys[0]
+    if not polys:
+        return np.empty((0, 2), dtype=np.float64)
+    centroid = np.vstack(polys).mean(axis=0)
+    remaining = list(range(len(polys)))
+    best = max(((i, end) for i in remaining for end in (0, -1)),
+               key=lambda ie: np.linalg.norm(polys[ie[0]][ie[1]] - centroid))
+    start_i, start_end = best
+    chain = polys[start_i] if start_end == 0 else polys[start_i][::-1]
+    remaining.remove(start_i)
+    while remaining:
+        tail = chain[-1]
+        cand = min(((i, end) for i in remaining for end in (0, -1)),
+                   key=lambda ie: np.linalg.norm(polys[ie[0]][ie[1]] - tail))
+        i, end = cand
+        seg = polys[i] if end == 0 else polys[i][::-1]
+        chain = np.vstack([chain, seg])
+        remaining.remove(i)
+    return chain
 
 
 @dataclass
@@ -33,10 +220,8 @@ class LaneStitcher:
     short_length = 30
     num_merges = 3
 
-    # --- 공유 모듈(polyline_merge) 기반 정리/병합 파라미터 (merge_annotation과 동일 기조) ---
+    # --- clean_lines(trim)·merge_lines 파라미터 ---
     trim_class_id = 1        # 겹침 trim 적용 클래스 (center_line)
-    dup_dist = 3.0           # 복제선 판정 점-본체 거리
-    dup_ratio = 0.8          # 복제선 판정 비율
     trim_step = 3.0          # trim 대상 재샘플 간격
     overlap_dist = 6.0       # 갈라짐 강임계(px)
     overlap_low = 3.0        # 갈라짐 약임계(px, hysteresis)
@@ -50,10 +235,11 @@ class LaneStitcher:
     residual_pass = True     # 1차 추출 후 남은 seg 영역에서 한 번 더 추출 (이중선 반대쪽 복원)
     residual_remove_width = 7 # 잔여 추출 시 1차 선 자취를 지우는 두께(px)
 
-    def __init__(self, data_path: str, pred_path: str, result_path: str, thickness: int = 3, sample_stride: int = 10, extend_len: int = 20, visualize: bool = True):
+    def __init__(self, data_path: str, pred_path: str, result_path: str, thickness: int = 3, sample_stride: int = 10, extend_len: int = 20, visualize: bool = True, do_clean: bool = True):
         self.thickness = thickness
         self.sample_stride = sample_stride
         self.extend_len = extend_len
+        self.do_clean = do_clean  # False면 clean_lines(trim)을 건너뛰고 3단계만 수행
         self._data_path = data_path
         self._pred_path = pred_path
         self._result_path = result_path
@@ -88,16 +274,22 @@ class LaneStitcher:
             self._id_count = self.id_offset
             image_id = os.path.basename(file_name).replace('.png', '')
 
-            lines, line_img = self.extract_lines(pred_img, file_name)
-            lines = self._clean_lines(lines)  # 복제 제거 + 평행 겹침 trim (지그재그 방지)
+            # 1단계: 1차 추출
+            first, line_img = self.extract_lines(pred_img, file_name)
+            # 2단계: residual 추출 — 1차 선 자취를 지운 seg 영역에서 한 번 더 추출
+            #         (이중 중앙선의 반대쪽 등 누락 선 복원)
             if self.residual_pass:
-                # 1차 선들이 덮지 못한 seg 영역에서 한 번 더 추출 (안전지대를 두고
-                # 갈라졌다 만나는 이중 중앙선의 반대쪽 등 누락 선 복원)
-                res, _ = self.extract_lines(self._residual_pred(pred_img, lines), file_name)
-                lines = self._combine_dedup(lines + self._clean_lines(res))
+                res, _ = self.extract_lines(self._residual_pred(pred_img, first), file_name)
+            else:
+                res = []
+            # 3단계: clean_lines — 1차와 residual을 구분 없이 한꺼번에 정리.
+            #         do_clean=True면 center_line 평행 겹침 trim, False면 re-id만.
+            combined = first + res
+            lines = self._clean_lines(combined) if self.do_clean else self._reindex_lines(combined)
             result_jsons[0] += self.convert_to_json(self._smoothed_copies(lines), image_id)
             images_to_save = {'src_img': image, 'anno_img': anno_img, 'pred_img': pred_img, 'origin': line_img}
 
+            # 4단계: merge_lines — 끝-끝 겹침 선들을 직렬 연결(stitch). 3회 반복.
             for n in range(1, self.num_merges + 1):
                 lines, line_img = self.merge_lines(lines, n - 1)
                 # 병합 완료 후 출력 단계에서 점들을 스무딩 (병합 자체는 원본 점으로 진행)
@@ -299,42 +491,43 @@ class LaneStitcher:
         direction = direction / norm
         return np.array([tip + direction * stride * i for i in range(1, n_ext + 1)])
 
-    def _clean_lines(self, lines: List[Strand]) -> List[Strand]:
-        """추출된 선들을 공유 모듈로 정리한다(merge_annotation과 동일 기조).
-
-        - 클래스별 복제선은 가장 긴 대표만 남김(dedup_keep_longest) → 점 섞임 없음.
-        - center_line의 평행 겹침은 가장 긴 기준선을 두고 짧은 선의 겹침 구간만 잘라냄
-          (trim_overlaps, hysteresis) → 갈라지는 가지는 별도 선으로 보존.
-        점을 평균/재정렬하지 않으므로 지그재그가 생기지 않는다."""
-        by_cls = {}
-        for l in lines:
-            if l.points is not None and len(l.points) >= 2:
-                by_cls.setdefault(l.class_id, []).append(l)
-
-        cleaned = []
-        for cid, group in by_cls.items():
-            kept = [group[k] for k in pm.dedup_keep_longest(
-                [g.points for g in group], self.dup_dist, self.dup_ratio)]
-            if cid == self.trim_class_id:
-                for src_i, pts in pm.trim_overlaps(
-                        [k.points for k in kept],
-                        overlap_high=self.overlap_dist, overlap_low=self.overlap_low,
-                        min_free_len=self.min_free_len, bridge_gap=self.bridge_gap, step=self.trim_step):
-                    base = kept[src_i]
-                    cleaned.append(Strand(id=base.id, peak=base.peak, class_id=cid,
-                                              points=np.rint(pts).astype(np.int32),
-                                              length=pm.arc_length(pts)))
-            else:
-                cleaned.extend(kept)
-
-        # id 고유성 보장(라벨맵 충돌 방지) + 변경된 점들의 확장점 재계산
+    def _reindex_lines(self, lines: List[Strand]) -> List[Strand]:
+        """선들의 id를 고유화(라벨맵 충돌 방지)하고 확장점을 재계산한다.
+        clean을 건너뛰는 경우(do_clean=False)에도 병합이 동작하도록 최소 전처리만 수행."""
         out = []
-        for i, l in enumerate(cleaned):
+        for i, l in enumerate(lines):
             if l.points is None or len(l.points) < 2:
                 continue
             l.id = self.id_offset + i
             out.append(self._extrapolate_line(l, self.extend_len, self.sample_stride))
         return out
+
+    def _clean_lines(self, lines: List[Strand]) -> List[Strand]:
+        """1차+residual 통합 선들을 정리한다 (3단계, center_line 평행 겹침 trim).
+
+        center_line의 평행 겹침은 가장 긴 기준선을 두고 짧은 선의 겹침 구간만 잘라낸다
+        (trim_overlaps, hysteresis) → 갈라지는 가지는 별도 선으로 보존. 1차/residual을
+        구분하지 않고 합쳐서 한 번에 처리하므로 cross-pass 겹침도 같은 기준으로 정리된다.
+        점을 평균/재정렬하지 않으므로 지그재그가 생기지 않는다.
+
+        (복제 제거 dedup은 이 파이프라인에선 효과가 0이라 제거함: residual을 두껍게 지운 뒤라
+        거의 같은 위치의 복제선이 생기지 않음. trim만 center_line에 실효가 있다.)"""
+        targets = [l for l in lines
+                   if l.class_id == self.trim_class_id and l.points is not None and len(l.points) >= 2]
+        others = [l for l in lines
+                  if l.class_id != self.trim_class_id and l.points is not None and len(l.points) >= 2]
+
+        trimmed = []
+        for src_i, pts in trim_overlaps(
+                [t.points for t in targets],
+                overlap_high=self.overlap_dist, overlap_low=self.overlap_low,
+                min_free_len=self.min_free_len, bridge_gap=self.bridge_gap, step=self.trim_step):
+            base = targets[src_i]
+            trimmed.append(Strand(id=base.id, peak=base.peak, class_id=self.trim_class_id,
+                                  points=np.rint(pts).astype(np.int32),
+                                  length=arc_length(pts)))
+
+        return self._reindex_lines(others + trimmed)
 
     def _residual_pred(self, pred_img: np.ndarray, lines: List[Strand]) -> np.ndarray:
         """1차 추출 선들의 자취(두께 residual_remove_width)를 seg map에서 지운 잔여 예측 이미지.
@@ -349,23 +542,6 @@ class LaneStitcher:
         residual[mask > 0] = 0
         return residual
 
-    def _combine_dedup(self, lines: List[Strand]) -> List[Strand]:
-        """1차+잔여 선을 합친 뒤 클래스별 복제만 제거하고 id를 고유화한다(trim 재적용 안 함).
-        잔여 추출에서 1차 선과 거의 겹친 찌꺼기 선이 잡히면 여기서 제거된다."""
-        by_cls = {}
-        for l in lines:
-            if l.points is not None and len(l.points) >= 2:
-                by_cls.setdefault(l.class_id, []).append(l)
-        kept = []
-        for group in by_cls.values():
-            kept += [group[k] for k in pm.dedup_keep_longest(
-                [g.points for g in group], self.dup_dist, self.dup_ratio)]
-        out = []
-        for i, l in enumerate(kept):
-            l.id = self.id_offset + i
-            out.append(self._extrapolate_line(l, self.extend_len, self.sample_stride))
-        return out
-
     def _smoothed_copies(self, lines: List[Strand]) -> List[Strand]:
         """점들을 이동평균으로 스무딩한 복사본을 만든다(원본 lines는 다음 병합용으로 보존).
         thinning/병합 경계에서 생기는 지그재그를 완화해 선을 반듯하게 편다."""
@@ -374,7 +550,7 @@ class LaneStitcher:
             if l.points is None or len(l.points) < 3:
                 out.append(l)
                 continue
-            sp = pm.smooth_polyline(l.points, self.smooth_window, self.smooth_iters)
+            sp = smooth_polyline(l.points, self.smooth_window, self.smooth_iters)
             out.append(Strand(id=l.id, peak=l.peak, class_id=l.class_id,
                                   points=np.rint(sp).astype(np.int32), length=l.length))
         return out
@@ -394,13 +570,13 @@ class LaneStitcher:
         id2idx = {l.id: i for i, l in enumerate(lines)}
         parent = list(range(n))
         members = {i: [i] for i in range(n)}
-        find = pm.make_find(parent)
+        find = make_find(parent)
         par_cache = {}
 
         def parallel(i, j):
             key = (i, j) if i < j else (j, i)
             if key not in par_cache:
-                par_cache[key] = pm.bodies_parallel(
+                par_cache[key] = bodies_parallel(
                     lines[i].points, lines[j].points, self.parallel_overlap, self.parallel_lateral)
             return par_cache[key]
 
@@ -436,9 +612,9 @@ class LaneStitcher:
                 out.append(lines[idxs[0]])
                 continue
             base = lines[idxs[0]]
-            chained = pm.concat_polylines_in_series([lines[k].points for k in idxs])
+            chained = concat_polylines_in_series([lines[k].points for k in idxs])
             base.points = np.rint(chained).astype(np.int32)
-            base.length = pm.arc_length(base.points)
+            base.length = arc_length(base.points)
             out.append(self._extrapolate_line(base, self.extend_len, self.sample_stride))
         return out
 

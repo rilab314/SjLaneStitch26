@@ -36,6 +36,7 @@ from pycocotools import mask as maskUtils
 from tqdm import tqdm
 
 import config as cfg
+import polyline_merge as pm
 
 
 @dataclass
@@ -301,13 +302,7 @@ class MergeAnnotator:
         return deduped
 
     def _is_duplicate(self, a: Lane, b: Lane) -> bool:
-        """두 LineString이 거의 같은 위치에 겹쳐 그려진 복제인지 판정.
-        한쪽 점들의 dup_ratio 이상이 상대 본체에서 dup_dist 이내이면 복제로 본다."""
-        d_ab = self._point_to_polyline_dist(a.points, b.points)
-        d_ba = self._point_to_polyline_dist(b.points, a.points)
-        cover_ab = float(np.mean(d_ab < self.dup_dist))
-        cover_ba = float(np.mean(d_ba < self.dup_dist))
-        return max(cover_ab, cover_ba) >= self.dup_ratio
+        return pm.is_duplicate(a.points, b.points, self.dup_dist, self.dup_ratio)
 
     # ------------------------------------------------------------------ #
     # 병합
@@ -388,102 +383,18 @@ class MergeAnnotator:
         return others + kept
 
     def _subtract_lane(self, pts: np.ndarray, refs: List[Lane]) -> List[np.ndarray]:
-        """pts에서 기준선(refs) 중 하나라도 측면거리 overlap_dist 이내인 점을 '겹침'으로
-        보고 제거한 뒤, 남은 연속 구간들을 점 배열 리스트로 반환한다.
-        짧은 겹침 단절(bridge_gap 이하)은 free로 메워(브리징) 과분할을 막는다."""
-        pts = np.asarray(pts, dtype=np.float64)
-        if len(pts) < 2:
-            return []
-        if not refs:
-            return [pts]  # 기준선은 원본 점 그대로 보존
-        # 불규칙 점간격을 정규화해 bridge_gap/min_free_len이 일관되게 동작하도록 재샘플
-        pts = self._resample_polyline(pts, self.trim_step)
-
-        dmin = np.full(len(pts), np.inf)
-        for r in refs:
-            dmin = np.minimum(dmin, self._point_to_polyline_dist(pts, r.points))
-        free = self._hysteresis_free(dmin)
-        free = self._bridge_runs(pts, free)
-
-        pieces = []
-        for s, e in self._true_runs(free):
-            run = pts[s:e]
-            if len(run) >= 2 and self._arc_length(run) >= self.min_free_len:
-                pieces.append(run)
-        return pieces
-
-    def _hysteresis_free(self, dmin: np.ndarray) -> np.ndarray:
-        """Canny 이중 임계 방식으로 free(겹치지 않음) 마스크를 만든다.
-
-        강임계(overlap_dist) 초과를 '확실히 갈라짐' 시드로 보고, 약임계(overlap_low)
-        초과로 연결된 구간이 시드를 하나라도 포함하면 그 구간 전체를 free로 확장한다.
-        이렇게 하면 6px에서 딱 자르지 않고 갈라짐 시작부(3~6px)까지 살린다."""
-        strong = dmin > self.overlap_dist
-        weak = dmin > self.overlap_low
-        free = np.zeros(len(dmin), dtype=bool)
-        for s, e in self._true_runs(weak):
-            if strong[s:e].any():   # 약임계 연결 구간에 강임계 시드가 있으면 전체 채택
-                free[s:e] = True
-        return free
-
-    def _bridge_runs(self, pts: np.ndarray, free: np.ndarray) -> np.ndarray:
-        """free(겹치지 않음) 구간 사이의 짧은 겹침 단절(호길이 bridge_gap 이하)을 free로
-        메운다. 점 하나가 우연히 임계 안/밖으로 튀어 free 구간이 쪼개지는 것을 막는다.
-        선두/말미의 겹침은 실제 trim 대상이므로 메우지 않는다(내부 단절만 처리)."""
-        free = free.copy()
-        n = len(free)
-        for s, e in self._true_runs(~free):  # 겹침(False) 런들
-            if 0 < s and e < n and self._arc_length(pts[s - 1:e + 1]) <= self.bridge_gap:
-                free[s:e] = True  # 양쪽이 free로 둘러싸인 내부 단절만 메움
-        return free
+        return pm.subtract_lane(
+            pts, [r.points for r in refs],
+            overlap_high=self.overlap_dist, overlap_low=self.overlap_low,
+            min_free_len=self.min_free_len, bridge_gap=self.bridge_gap, step=self.trim_step)
 
     @staticmethod
     def _make_find(parent: List[int]):
-        """경로 압축 union-find의 find 함수를 만들어 반환한다."""
-        def find(a):
-            while parent[a] != a:
-                parent[a] = parent[parent[a]]
-                a = parent[a]
-            return a
-        return find
-
-    @staticmethod
-    def _true_runs(mask: np.ndarray):
-        """불리언 배열에서 연속된 True 구간의 (start, end) 리스트(end 배타적)를 반환한다."""
-        m = np.asarray(mask)
-        if m.size == 0:
-            return []
-        d = np.diff(m.astype(np.int8))
-        starts = (np.flatnonzero(d == 1) + 1).tolist()
-        ends = (np.flatnonzero(d == -1) + 1).tolist()
-        if m[0]:
-            starts.insert(0, 0)
-        if m[-1]:
-            ends.append(m.size)
-        return list(zip(starts, ends))
+        return pm.make_find(parent)
 
     @staticmethod
     def _arc_length(points: np.ndarray) -> float:
-        if len(points) < 2:
-            return 0.0
-        return float(np.linalg.norm(np.diff(np.asarray(points, float), axis=0), axis=1).sum())
-
-    @staticmethod
-    def _resample_polyline(points: np.ndarray, step: float) -> np.ndarray:
-        """순서가 있는 폴리라인을 호길이 균일 간격(step)으로 재샘플한다."""
-        pts = np.asarray(points, dtype=np.float64)
-        if len(pts) < 2:
-            return pts
-        seglen = np.linalg.norm(np.diff(pts, axis=0), axis=1)
-        cum = np.concatenate([[0.0], np.cumsum(seglen)])
-        total = float(cum[-1])
-        if total < 1e-6:
-            return pts[:1]
-        m = max(int(np.floor(total / step)), 1)
-        s = np.linspace(0.0, total, m + 1)
-        x = np.interp(s, cum, pts[:, 0])
-        y = np.interp(s, cum, pts[:, 1])
-        return np.stack([x, y], axis=1)
+        return pm.arc_length(points)
 
     def _should_merge(self, a: Lane, b: Lane) -> bool:
         """두 LineString이 끝과 끝으로 이어지면 True.
@@ -512,51 +423,7 @@ class MergeAnnotator:
         return False
 
     def _bodies_parallel(self, a: Lane, b: Lane) -> bool:
-        """두 LineString의 본체가 나란히(평행 이중선) 달리는지 검사.
-
-        진행 방향(공통 주축)으로 두 본체를 투영했을 때 종축 구간이 크게 겹치면
-        평행 이중선으로 보고 병합을 막는다.
-        - 끝과 끝으로 이어지는 연장(collinear)은 서로 다른 종축 구간을 차지하므로
-          겹침 비율이 0에 가까워 구분된다. (점 개수/길이에 무관하게 안정적)
-        - 측면 간격이 너무 크면(곡선 연장 등으로 주축이 비스듬한 경우) 평행으로
-          보지 않는다.
-
-        이전의 '가까운 점 비율' 방식은 짧은 분절이 끝점에서 만나면 접점 근방
-        점들이 비율을 끌어올려 연장을 평행으로 오판했다(특히 점 2~3개짜리 분절)."""
-        pa, pb = a.points, b.points
-        allp = np.vstack([pa, pb])
-        center = allp.mean(axis=0)
-        # 두 본체를 함께 설명하는 주축(=진행 방향)과 수직축을 SVD로 구한다.
-        _, _, vt = np.linalg.svd(allp - center)
-        axis, perp = vt[0], vt[1]
-
-        proj_a, proj_b = (pa - center) @ axis, (pb - center) @ axis
-        amin, amax = proj_a.min(), proj_a.max()
-        bmin, bmax = proj_b.min(), proj_b.max()
-        inter = max(0.0, min(amax, bmax) - max(amin, bmin))
-        shorter = min(amax - amin, bmax - bmin)
-        overlap = inter / shorter if shorter > 1e-6 else 0.0
-
-        lateral = abs(float(np.median((pa - center) @ perp) -
-                          np.median((pb - center) @ perp)))
-        return overlap > self.parallel_overlap and lateral < self.parallel_lateral
-
-    @staticmethod
-    def _point_to_polyline_dist(pts: np.ndarray, poly: np.ndarray) -> np.ndarray:
-        """pts(M,2)의 각 점에서 polyline(N,2)까지의 최소 거리 (M,) 반환.
-        선분 위로 투영(클램프)하여 점-선분 거리를 계산한다."""
-        if len(poly) < 2:
-            return np.full(len(pts), np.inf)
-        seg_a = poly[:-1]                         # (S, 2)
-        seg_ab = poly[1:] - poly[:-1]             # (S, 2)
-        seg_len2 = np.sum(seg_ab ** 2, axis=1)    # (S,)
-        seg_len2[seg_len2 == 0] = 1e-9
-        rel = pts[:, None, :] - seg_a[None, :, :]            # (M, S, 2)
-        t = np.sum(rel * seg_ab[None, :, :], axis=2) / seg_len2[None, :]  # (M, S)
-        t = np.clip(t, 0.0, 1.0)
-        proj = seg_a[None, :, :] + t[:, :, None] * seg_ab[None, :, :]     # (M, S, 2)
-        d = np.linalg.norm(pts[:, None, :] - proj, axis=2)               # (M, S)
-        return d.min(axis=1)
+        return pm.bodies_parallel(a.points, b.points, self.parallel_overlap, self.parallel_lateral)
 
     def _merge_group(self, members: List[Lane]) -> Lane:
         """여러 LineString의 점들을 통합한 뒤 순서대로 정렬한다."""

@@ -13,6 +13,7 @@ from tqdm import tqdm
 
 from show_imgs import ImageShow
 import config as cfg
+import polyline_merge as pm
 
 
 @dataclass
@@ -31,6 +32,23 @@ class LineStringDetector:
     overlap_thresh = 2  # 겹치는 픽셀 수
     short_length = 30
     num_merges = 3
+
+    # --- 공유 모듈(polyline_merge) 기반 정리/병합 파라미터 (merge_annotation과 동일 기조) ---
+    trim_class_id = 1        # 겹침 trim 적용 클래스 (center_line)
+    dup_dist = 3.0           # 복제선 판정 점-본체 거리
+    dup_ratio = 0.8          # 복제선 판정 비율
+    trim_step = 3.0          # trim 대상 재샘플 간격
+    overlap_dist = 6.0       # 갈라짐 강임계(px)
+    overlap_low = 3.0        # 갈라짐 약임계(px, hysteresis)
+    min_free_len = 20.0      # trim 후 남길 최소 조각 길이(px)
+    bridge_gap = 10.0        # trim 짧은 겹침 단절 브리징(px)
+    parallel_overlap = 0.5   # 평행 본체 종축 겹침 임계
+    parallel_lateral = 30.0  # 평행 본체 최대 측면 간격(px)
+    turn_penalty = 3.0       # 샘플링 시 다음점 선택의 곡률 패널티. 분기에서 곧게 잇는 쪽을 선호(0=거리만)
+    smooth_window = 5        # 병합 후 점 스무딩 이동평균 창 크기(점)
+    smooth_iters = 1         # 스무딩 반복 횟수
+    residual_pass = True     # 1차 추출 후 남은 seg 영역에서 한 번 더 추출 (이중선 반대쪽 복원)
+    residual_remove_width = 7 # 잔여 추출 시 1차 선 자취를 지우는 두께(px)
 
     def __init__(self, data_path: str, pred_path: str, result_path: str, thickness: int = 3, sample_stride: int = 10, extend_len: int = 20, visualize: bool = True):
         self.thickness = thickness
@@ -53,26 +71,37 @@ class LineStringDetector:
         print("make result path: ", self._result_path)
         os.makedirs(self._result_path, exist_ok=True)
 
-    def detect_lines(self):
+    def detect_lines(self, image_ids=None, desc=None):
         file_list = sorted(glob.glob(os.path.join(self._data_path, 'images', 'validation', '*.png')))
+        if image_ids is not None:  # 특정 이미지 부분집합만 처리 (실험/비교용)
+            keep = set(image_ids)
+            file_list = [f for f in file_list if os.path.basename(f)[:-4] in keep]
         result_jsons = [[] for _ in range(self.num_merges + 1)]  # index 0=origin, 1~3=merge1~3
 
-        for i, file_name in enumerate(file_list):
+        pbar = tqdm(enumerate(file_list), total=len(file_list), desc=desc or 'frames')
+        for i, file_name in pbar:
             # if i > 10:
             #     break
-            print(f'===== [file_name] ===== {i} / {len(file_list)}, file:{file_name}')
+            pbar.set_postfix_str(os.path.basename(file_name))
             image, pred_img, anno_img = self._read_image(file_name)
             self._img_shape = image.shape[:2]
             self._id_count = self.id_offset
             image_id = os.path.basename(file_name).replace('.png', '')
 
             lines, line_img = self.extract_lines(pred_img, file_name)
-            result_jsons[0] += self.convert_to_json(lines, image_id)
+            lines = self._clean_lines(lines)  # 복제 제거 + 평행 겹침 trim (지그재그 방지)
+            if self.residual_pass:
+                # 1차 선들이 덮지 못한 seg 영역에서 한 번 더 추출 (안전지대를 두고
+                # 갈라졌다 만나는 이중 중앙선의 반대쪽 등 누락 선 복원)
+                res, _ = self.extract_lines(self._residual_pred(pred_img, lines), file_name)
+                lines = self._combine_dedup(lines + self._clean_lines(res))
+            result_jsons[0] += self.convert_to_json(self._smoothed_copies(lines), image_id)
             images_to_save = {'src_img': image, 'anno_img': anno_img, 'pred_img': pred_img, 'origin': line_img}
 
             for n in range(1, self.num_merges + 1):
                 lines, line_img = self.merge_lines(lines, n - 1)
-                result_jsons[n] += self.convert_to_json(lines, image_id)
+                # 병합 완료 후 출력 단계에서 점들을 스무딩 (병합 자체는 원본 점으로 진행)
+                result_jsons[n] += self.convert_to_json(self._smoothed_copies(lines), image_id)
                 images_to_save[f'merge{n}'] = line_img
 
             if self._visualize:
@@ -80,7 +109,7 @@ class LineStringDetector:
             # self.save_images(self._imshow_save.update_whole_image(), file_name)
             # self._imshow_proc.display(1)
             counts = ', '.join(f'merge{n}={len(result_jsons[n])}' for n in range(self.num_merges + 1))
-            print(f'instance counts: {counts}\n')
+            pbar.write(f'[{i+1}/{len(file_list)}] {os.path.basename(file_name)} instance counts: {counts}')
 
         self._save_result_jsons(result_jsons)
 
@@ -218,13 +247,20 @@ class LineStringDetector:
         points = src_points.copy()
         while len(points) > 0:
             last_point = sorted_points[-1] if to_tail else sorted_points[0]
-            distances = np.sqrt(np.sum((points - last_point) ** 2, axis=1))
-            dot_products = np.sum((points - last_point) * direction, axis=1)
-            valid_mask = (distances < 30) & (distances >= stride) & (dot_products >= 0)
+            vecs = points - last_point
+            distances = np.sqrt(np.sum(vecs ** 2, axis=1))
+            dir_norm = float(np.linalg.norm(direction))
+            # 진행 방향과 후보 스텝 사이 각의 코사인
+            with np.errstate(invalid='ignore', divide='ignore'):
+                cos_ang = np.sum(vecs * direction, axis=1) / (distances * dir_norm + 1e-9)
+            # 유효 후보: 거리 [stride,30) & 전방(90° cone). 하드 게이트로 선을 끊지 않는다.
+            valid_mask = (distances < 30) & (distances >= stride) & (cos_ang >= 0)
             if np.sum(valid_mask) == 0:
                 break
-            distances[~valid_mask] = np.inf
-            next_index = np.argmin(distances)
+            # 거리 + 곡률 패널티로 선택 → 분기에서 곧게 이어지는 후보를 선호(직선은 그대로 통과)
+            score = distances * (1.0 + self.turn_penalty * (1.0 - cos_ang))
+            score[~valid_mask] = np.inf
+            next_index = np.argmin(score)
             if to_tail:
                 sorted_points.append(points[next_index])
                 # print(f'[sort_to_direction] next point: {sorted_points[-1]}')
@@ -263,31 +299,148 @@ class LineStringDetector:
         direction = direction / norm
         return np.array([tip + direction * stride * i for i in range(1, n_ext + 1)])
 
-    def _merge_lines_by_class(self, line_strings: List[LineString], iter_count: int = 0) -> List[LineString]:
-        if len(line_strings) == 0:
-            return []
-        for line in line_strings:
-            overlap_ids = self._find_overlap(line_strings, line)
-            if len(overlap_ids) == 0:
-                continue
-            for overlap_id in overlap_ids:
-                oppo_line = next((l for l in line_strings if l.id == overlap_id), None)
-                if oppo_line is None:
-                    continue
-                if oppo_line.points is None:
-                    continue
-                combined_img = self._connect_tail2head(line, oppo_line)
-                combined_img = cv2.cvtColor(combined_img, cv2.COLOR_BGR2GRAY)
-                line.points = self._sample_points(combined_img, self.sample_stride)
-                line.length = np.sum(np.linalg.norm(np.diff(line.points, axis=0), axis=1))
-                line = self._extrapolate_line(line, self.extend_len, self.sample_stride)
-                # print(f'line {line.id} is merged with line {oppo_line.id}')
-                oppo_line.id = None
-                oppo_line.ext_points = None
+    def _clean_lines(self, lines: List[LineString]) -> List[LineString]:
+        """추출된 선들을 공유 모듈로 정리한다(merge_annotation과 동일 기조).
 
-        # id가 None이 아닌 선들만 남김
-        line_strings = [line for line in line_strings if line.id is not None]
-        return line_strings
+        - 클래스별 복제선은 가장 긴 대표만 남김(dedup_keep_longest) → 점 섞임 없음.
+        - center_line의 평행 겹침은 가장 긴 기준선을 두고 짧은 선의 겹침 구간만 잘라냄
+          (trim_overlaps, hysteresis) → 갈라지는 가지는 별도 선으로 보존.
+        점을 평균/재정렬하지 않으므로 지그재그가 생기지 않는다."""
+        by_cls = {}
+        for l in lines:
+            if l.points is not None and len(l.points) >= 2:
+                by_cls.setdefault(l.class_id, []).append(l)
+
+        cleaned = []
+        for cid, group in by_cls.items():
+            kept = [group[k] for k in pm.dedup_keep_longest(
+                [g.points for g in group], self.dup_dist, self.dup_ratio)]
+            if cid == self.trim_class_id:
+                for src_i, pts in pm.trim_overlaps(
+                        [k.points for k in kept],
+                        overlap_high=self.overlap_dist, overlap_low=self.overlap_low,
+                        min_free_len=self.min_free_len, bridge_gap=self.bridge_gap, step=self.trim_step):
+                    base = kept[src_i]
+                    cleaned.append(LineString(id=base.id, peak=base.peak, class_id=cid,
+                                              points=np.rint(pts).astype(np.int32),
+                                              length=pm.arc_length(pts)))
+            else:
+                cleaned.extend(kept)
+
+        # id 고유성 보장(라벨맵 충돌 방지) + 변경된 점들의 확장점 재계산
+        out = []
+        for i, l in enumerate(cleaned):
+            if l.points is None or len(l.points) < 2:
+                continue
+            l.id = self.id_offset + i
+            out.append(self._extrapolate_line(l, self.extend_len, self.sample_stride))
+        return out
+
+    def _residual_pred(self, pred_img: np.ndarray, lines: List[LineString]) -> np.ndarray:
+        """1차 추출 선들의 자취(두께 residual_remove_width)를 seg map에서 지운 잔여 예측 이미지.
+        지워진 픽셀은 배경(0)으로 만들어 잔여 추출 시 같은 선이 다시 잡히지 않게 한다."""
+        mask = np.zeros((self._img_shape[0], self._img_shape[1]), dtype=np.uint8)
+        for l in lines:
+            if l.points is None or len(l.points) < 2:
+                continue
+            pts = l.points.reshape((-1, 1, 2)).astype(np.int32)
+            cv2.polylines(mask, [pts], isClosed=False, color=255, thickness=self.residual_remove_width)
+        residual = pred_img.copy()
+        residual[mask > 0] = 0
+        return residual
+
+    def _combine_dedup(self, lines: List[LineString]) -> List[LineString]:
+        """1차+잔여 선을 합친 뒤 클래스별 복제만 제거하고 id를 고유화한다(trim 재적용 안 함).
+        잔여 추출에서 1차 선과 거의 겹친 찌꺼기 선이 잡히면 여기서 제거된다."""
+        by_cls = {}
+        for l in lines:
+            if l.points is not None and len(l.points) >= 2:
+                by_cls.setdefault(l.class_id, []).append(l)
+        kept = []
+        for group in by_cls.values():
+            kept += [group[k] for k in pm.dedup_keep_longest(
+                [g.points for g in group], self.dup_dist, self.dup_ratio)]
+        out = []
+        for i, l in enumerate(kept):
+            l.id = self.id_offset + i
+            out.append(self._extrapolate_line(l, self.extend_len, self.sample_stride))
+        return out
+
+    def _smoothed_copies(self, lines: List[LineString]) -> List[LineString]:
+        """점들을 이동평균으로 스무딩한 복사본을 만든다(원본 lines는 다음 병합용으로 보존).
+        thinning/병합 경계에서 생기는 지그재그를 완화해 선을 반듯하게 편다."""
+        out = []
+        for l in lines:
+            if l.points is None or len(l.points) < 3:
+                out.append(l)
+                continue
+            sp = pm.smooth_polyline(l.points, self.smooth_window, self.smooth_iters)
+            out.append(LineString(id=l.id, peak=l.peak, class_id=l.class_id,
+                                  points=np.rint(sp).astype(np.int32), length=l.length))
+        return out
+
+    def _merge_lines_by_class(self, line_strings: List[LineString], iter_count: int = 0) -> List[LineString]:
+        """끝-끝으로 이어지는 선들을 직렬 연결로 병합한다(점 단위 NN 재정렬 안 함).
+
+        후보쌍은 기존처럼 확장 끝선분 겹침(_find_overlap)으로 찾되, 평행 본체 쌍은
+        거부(bodies_parallel)해 평행 가닥 오병합으로 인한 지그재그를 막는다.
+        각 그룹은 폴리라인 단위 체이닝(concat_polylines_in_series)으로 이어 붙여
+        각 선의 내부 점 순서를 보존한다."""
+        lines = [l for l in line_strings
+                 if l.id is not None and l.points is not None and len(l.points) >= 2]
+        n = len(lines)
+        if n == 0:
+            return []
+        id2idx = {l.id: i for i, l in enumerate(lines)}
+        parent = list(range(n))
+        members = {i: [i] for i in range(n)}
+        find = pm.make_find(parent)
+        par_cache = {}
+
+        def parallel(i, j):
+            key = (i, j) if i < j else (j, i)
+            if key not in par_cache:
+                par_cache[key] = pm.bodies_parallel(
+                    lines[i].points, lines[j].points, self.parallel_overlap, self.parallel_lateral)
+            return par_cache[key]
+
+        # 후보쌍: 확장 끝선분이 겹치는 같은 클래스 쌍
+        candidates = set()
+        for i, line in enumerate(lines):
+            for oid in self._find_overlap(lines, line):
+                j = id2idx.get(int(oid))
+                if j is not None and j != i:
+                    candidates.add((i, j) if i < j else (j, i))
+
+        # 그룹 인식 union: 평행 가닥은 병합 거부 (전이적 평행 오병합 방지)
+        for i, j in candidates:
+            if parallel(i, j):
+                continue
+            ri, rj = find(i), find(j)
+            if ri == rj:
+                continue
+            mi, mj = members[ri], members[rj]
+            if any(parallel(p, q) for p in mi for q in mj):
+                continue
+            parent[rj] = ri
+            members[ri] = mi + mj
+            members.pop(rj, None)
+
+        groups = {}
+        for i in range(n):
+            groups.setdefault(find(i), []).append(i)
+
+        out = []
+        for idxs in groups.values():
+            if len(idxs) == 1:
+                out.append(lines[idxs[0]])
+                continue
+            base = lines[idxs[0]]
+            chained = pm.concat_polylines_in_series([lines[k].points for k in idxs])
+            base.points = np.rint(chained).astype(np.int32)
+            base.length = pm.arc_length(base.points)
+            out.append(self._extrapolate_line(base, self.extend_len, self.sample_stride))
+        return out
 
     def _find_overlap(self, line_strings: List[LineString], this_line: LineString) -> Set[int]:
         src_line_id = this_line.id
@@ -314,24 +467,6 @@ class LineStringDetector:
         label_ids = set(unique[mask_cond].tolist())
         # print(f'unique: {unique}, counts: {counts}, label_ids: {label_ids}')
         return label_ids
-
-    def _connect_tail2head(self, line, oppo_line):
-        image = np.zeros((self._img_shape[1], self._img_shape[0], 3), dtype=np.uint8)
-        color = (line.id, line.id, line.id)
-        line_pts = line.points.reshape((-1, 1, 2))
-        oppo_pts = oppo_line.points.reshape((-1, 1, 2))
-        cv2.polylines(image, [line_pts], isClosed=False, color=color, thickness=1)
-        cv2.polylines(image, [oppo_pts], isClosed=False, color=color, thickness=1)
-
-        this_endpoints = np.array([line.points[0], line.points[-1]])
-        oppo_endpoints = np.array([oppo_line.points[0], oppo_line.points[-1]])
-        distances = np.linalg.norm(this_endpoints[:, np.newaxis, :] - oppo_endpoints, axis=2)
-        min_idx_flat = np.argmin(distances)
-        this_idx, oppo_idx = np.unravel_index(min_idx_flat, distances.shape)
-        # print(f'min distance: {distances[this_idx, oppo_idx]:1.1f}, class_id: {line.class_id}, this_idx: {line.id}, oppo_idx: {oppo_line.id}')
-        endpoints = [this_endpoints[this_idx], oppo_endpoints[oppo_idx]]
-        cv2.line(image, endpoints[0], endpoints[1], color=color, thickness=1)
-        return image
 
     def _save_result_jsons(self, result_jsons: list):
         names = ['origin'] + [f'merge{n}' for n in range(1, self.num_merges + 1)]

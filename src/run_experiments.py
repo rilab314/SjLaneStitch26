@@ -8,28 +8,63 @@ from lane_detector import LineStringDetector
 from evaluator import evaluate_all, evaluate_coco_ap, _filename_to_merge_count
 
 
+BEST_MODEL = 'mask2former_large'   # Swin-L 백본, AP20 최고 모델. 이 모델만 전체 파라미터 스윕
+
+
 def run_experiments(visualize=True):
     sample_strides = [5, 10]
-    extend_lens = [20, 30, 40]
+    extend_lens = [10, 20, 30]
+    turn_penalties = [0, 3, 5]
     thicknesses = 3
 
     model_paths = find_model_paths(cfg.DATA_ROOT)
     coco_gt_json = cfg.COCO_MERGED_ANNO_PATH
     label_path = os.path.join(cfg.DATASET_PATH, 'annotations', 'validation')
-    total_runs = len(model_paths) * len(sample_strides) * len(extend_lens)
-    print(f"Total Experiments: {total_runs}")
 
-    for model_path in model_paths:
-        model_name = os.path.basename(model_path)
-        for s in sample_strides:
-            for e in extend_lens:
-                run_single_experiment(model_path, model_name, thicknesses, s, e, coco_gt_json, label_path, visualize)
+    best_dir = cfg.MODEL_PREFIX + BEST_MODEL
+    best_path = next((p for p in model_paths if os.path.basename(p) == best_dir), None)
+    if best_path is None:
+        print(f"경고: 최고 모델 '{best_dir}' 미발견 -> 첫 모델로 대체")
+        best_path = model_paths[0]
+    other_paths = [p for p in model_paths if p != best_path]
+
+    combos = [(s, e, tp) for s in sample_strides for e in extend_lens for tp in turn_penalties]
+    total_runs = len(combos) + len(other_paths)
+    print(f"Total Experiments: {total_runs} "
+          f"(최고 모델 {len(combos)} 조합 전체 스윕 + 나머지 {len(other_paths)} 모델 × 최적 1조합)")
+
+    # 1) 최고 모델: 전체 파라미터 스윕
+    run_idx = 0
+    best_name = os.path.basename(best_path)
+    for s, e, tp in combos:
+        run_idx += 1
+        run_single_experiment(best_path, best_name, thicknesses, s, e, tp,
+                              coco_gt_json, label_path, visualize, run_idx, total_runs)
+
+    # 2) 최고 모델의 최적 파라미터(AP20 최대) 결정
+    bs, be, btp = _best_param_combo(best_name)
+    print(f"\n최고 모델({BEST_MODEL}) 최적 파라미터: stride={bs}, extend={be}, turn={btp}")
+
+    # 3) 나머지 모델: 모델만 교체해 최적 파라미터로 1회씩
+    for p in other_paths:
+        run_idx += 1
+        run_single_experiment(p, os.path.basename(p), thicknesses, bs, be, btp,
+                              coco_gt_json, label_path, visualize, run_idx, total_runs)
 
     print("\nAll experiments completed.")
 
 
-def run_single_experiment(model_path, model_name, t, s, e, coco_gt_json, label_path, visualize=True):
-    param_name = f"thick={t},stride={s},extend={e}"
+def _best_param_combo(model_dir_name):
+    """주어진 모델의 eval_result.csv들에서 AP20 최대 행의 (stride, extend, turn)을 반환한다."""
+    csvs = glob.glob(os.path.join(cfg.RESULT_PATH, model_dir_name, '*', 'eval_result.csv'))
+    rows = pd.concat([parse_single_csv(f) for f in csvs], ignore_index=True)
+    best = rows.loc[rows['AP20'].idxmax()]
+    return int(best['sample_strides']), int(best['extend_lens']), int(best['turn_penalties'])
+
+
+def run_single_experiment(model_path, model_name, t, s, e, tp, coco_gt_json, label_path,
+                          visualize=True, run_idx=1, total_runs=1):
+    param_name = f"thick={t},stride={s},extend={e},turn={tp}"
     result_path = os.path.join(cfg.RESULT_PATH, model_name, param_name)
     os.makedirs(result_path, exist_ok=True)
 
@@ -48,7 +83,9 @@ def run_single_experiment(model_path, model_name, t, s, e, coco_gt_json, label_p
         extend_len=e,
         visualize=visualize
     )
-    detector.detect_lines()
+    detector.turn_penalty = tp  # 클래스 속성(생성자 인자 아님)을 인스턴스에서 오버라이드
+    desc = f"[조합 {run_idx}/{total_runs}] {model_name} {param_name}"
+    detector.detect_lines(desc=desc)
     evaluate_all(coco_gt_json, label_path, model_path, result_path)
 
 
@@ -130,11 +167,11 @@ def find_best_model_and_params():
     df_list = [parse_single_csv(f) for f in csv_files]
     merged_df = pd.concat(df_list, ignore_index=True)
 
-    merged_df = merged_df.sort_values(by=['model_name', 'sample_strides', 'extend_lens', 'thicknesses', 'merge_count'])
+    merged_df = merged_df.sort_values(by=['model_name', 'sample_strides', 'extend_lens', 'turn_penalties', 'thicknesses', 'merge_count'])
 
     float_cols = ['AP10', 'AP20', 'AP50', 'mIoU']
     merged_df[float_cols] = merged_df[float_cols].round(4)
-    int_cols = ['merge_count', 'thicknesses', 'sample_strides', 'extend_lens', 'instances']
+    int_cols = ['merge_count', 'thicknesses', 'sample_strides', 'extend_lens', 'turn_penalties', 'instances']
     merged_df[int_cols] = merged_df[int_cols].astype("Int64")
     save_path = os.path.join(cfg.RESULT_PATH, "total_performance.csv")
     merged_df.to_csv(save_path, index=False, encoding='utf-8')
@@ -157,7 +194,8 @@ def parse_single_csv(file_path):
     df['thicknesses'] = int(params.get('thick', 0))
     df['sample_strides'] = int(params.get('stride', 0))
     df['extend_lens'] = int(params.get('extend', 0))
-    column_order = ['model_name', 'merge_count', 'thicknesses', 'sample_strides', 'extend_lens', 'instances', 'AP10', 'AP20', 'AP50', 'mIoU']
+    df['turn_penalties'] = int(params.get('turn', 0))
+    column_order = ['model_name', 'merge_count', 'thicknesses', 'sample_strides', 'extend_lens', 'turn_penalties', 'instances', 'AP10', 'AP20', 'AP50', 'mIoU']
     return df[column_order]
 
 

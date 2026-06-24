@@ -20,7 +20,7 @@ IOUs=[0.10, 0.20, 0.50]
 
 
 def main():
-    coco_gt_json = os.path.join(cfg.RESULT_PATH, "merged_annotations.json")
+    coco_gt_json = cfg.COCO_MERGED_ANNO_PATH
     label_path = os.path.join(cfg.DATASET_PATH, "annotations", "validation")
     
     from util import find_best_pred_json_path, find_model_path

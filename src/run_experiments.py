@@ -84,7 +84,8 @@ def run_single_experiment(model_path, model_name, t, s, e, tp, coco_gt_json, lab
         visualize=visualize
     )
     detector.turn_penalty = tp  # 클래스 속성(생성자 인자 아님)을 인스턴스에서 오버라이드
-    desc = f"[조합 {run_idx}/{total_runs}] {model_name} {param_name}"
+    # param_name은 위 배너에 표시되므로 desc에선 생략 → 진행바 폭 확보
+    desc = f"[조합 {run_idx}/{total_runs}] {model_name}"
     detector.detect_lines(desc=desc)
     evaluate_all(coco_gt_json, label_path, model_path, result_path)
 

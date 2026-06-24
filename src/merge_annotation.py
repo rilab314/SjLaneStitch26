@@ -36,7 +36,139 @@ from pycocotools import mask as maskUtils
 from tqdm import tqdm
 
 import config as cfg
-import polyline_merge as pm
+
+
+# ====================================================================== #
+# 기하/정리 순수 함수 (구 polyline_merge 모듈을 merge_annotation이 자체 보유)
+# dedup(is_duplicate)·trim(subtract_lane)에 쓰는 폴리라인 유틸.
+# ====================================================================== #
+def arc_length(points: np.ndarray) -> float:
+    if len(points) < 2:
+        return 0.0
+    return float(np.linalg.norm(np.diff(np.asarray(points, float), axis=0), axis=1).sum())
+
+
+def resample_polyline(points: np.ndarray, step: float) -> np.ndarray:
+    """순서가 있는 폴리라인을 호길이 균일 간격(step)으로 재샘플한다."""
+    pts = np.asarray(points, dtype=np.float64)
+    if len(pts) < 2:
+        return pts
+    seglen = np.linalg.norm(np.diff(pts, axis=0), axis=1)
+    cum = np.concatenate([[0.0], np.cumsum(seglen)])
+    total = float(cum[-1])
+    if total < 1e-6:
+        return pts[:1]
+    m = max(int(np.floor(total / step)), 1)
+    s = np.linspace(0.0, total, m + 1)
+    x = np.interp(s, cum, pts[:, 0])
+    y = np.interp(s, cum, pts[:, 1])
+    return np.stack([x, y], axis=1)
+
+
+def true_runs(mask: np.ndarray):
+    """불리언 배열에서 연속된 True 구간의 (start, end) 리스트(end 배타적)를 반환한다."""
+    m = np.asarray(mask)
+    if m.size == 0:
+        return []
+    d = np.diff(m.astype(np.int8))
+    starts = (np.flatnonzero(d == 1) + 1).tolist()
+    ends = (np.flatnonzero(d == -1) + 1).tolist()
+    if m[0]:
+        starts.insert(0, 0)
+    if m[-1]:
+        ends.append(m.size)
+    return list(zip(starts, ends))
+
+
+def make_find(parent):
+    """경로 압축 union-find의 find 함수를 만들어 반환한다."""
+    def find(a):
+        while parent[a] != a:
+            parent[a] = parent[parent[a]]
+            a = parent[a]
+        return a
+    return find
+
+
+def point_to_polyline_dist(pts: np.ndarray, poly: np.ndarray) -> np.ndarray:
+    """pts(M,2)의 각 점에서 polyline(N,2)까지의 최소 거리 (M,) 반환."""
+    if len(poly) < 2:
+        return np.full(len(pts), np.inf)
+    seg_a = poly[:-1]
+    seg_ab = poly[1:] - poly[:-1]
+    seg_len2 = np.sum(seg_ab ** 2, axis=1)
+    seg_len2[seg_len2 == 0] = 1e-9
+    rel = pts[:, None, :] - seg_a[None, :, :]
+    t = np.sum(rel * seg_ab[None, :, :], axis=2) / seg_len2[None, :]
+    t = np.clip(t, 0.0, 1.0)
+    proj = seg_a[None, :, :] + t[:, :, None] * seg_ab[None, :, :]
+    d = np.linalg.norm(pts[:, None, :] - proj, axis=2)
+    return d.min(axis=1)
+
+
+def bodies_parallel(a: np.ndarray, b: np.ndarray, overlap_thr: float, lateral_thr: float) -> bool:
+    """두 폴리라인 본체가 나란히(평행 이중선) 달리는지 검사."""
+    allp = np.vstack([a, b])
+    center = allp.mean(axis=0)
+    _, _, vt = np.linalg.svd(allp - center)
+    axis, perp = vt[0], vt[1]
+    proj_a, proj_b = (a - center) @ axis, (b - center) @ axis
+    amin, amax = proj_a.min(), proj_a.max()
+    bmin, bmax = proj_b.min(), proj_b.max()
+    inter = max(0.0, min(amax, bmax) - max(amin, bmin))
+    shorter = min(amax - amin, bmax - bmin)
+    overlap = inter / shorter if shorter > 1e-6 else 0.0
+    lateral = abs(float(np.median((a - center) @ perp) - np.median((b - center) @ perp)))
+    return overlap > overlap_thr and lateral < lateral_thr
+
+
+def is_duplicate(a: np.ndarray, b: np.ndarray, dup_dist: float, dup_ratio: float) -> bool:
+    """두 폴리라인이 거의 같은 위치에 겹쳐 그려진 복제인지 판정."""
+    cover_ab = float(np.mean(point_to_polyline_dist(a, b) < dup_dist))
+    cover_ba = float(np.mean(point_to_polyline_dist(b, a) < dup_dist))
+    return max(cover_ab, cover_ba) >= dup_ratio
+
+
+def hysteresis_free(dmin: np.ndarray, high: float, low: float) -> np.ndarray:
+    """Canny 이중 임계로 free(겹치지 않음) 마스크 생성."""
+    strong = dmin > high
+    weak = dmin > low
+    free = np.zeros(len(dmin), dtype=bool)
+    for s, e in true_runs(weak):
+        if strong[s:e].any():
+            free[s:e] = True
+    return free
+
+
+def bridge_runs(pts: np.ndarray, free: np.ndarray, bridge_gap: float) -> np.ndarray:
+    """free 구간 사이의 짧은 겹침 단절(호길이 bridge_gap 이하)을 free로 메운다(내부만)."""
+    free = free.copy()
+    n = len(free)
+    for s, e in true_runs(~free):
+        if 0 < s and e < n and arc_length(pts[s - 1:e + 1]) <= bridge_gap:
+            free[s:e] = True
+    return free
+
+
+def subtract_lane(pts, refs, *, overlap_high, overlap_low, min_free_len, bridge_gap, step):
+    """pts에서 기준선(refs) 중 하나라도 측면거리 이내인 점을 제거하고 남은 구간 리스트 반환."""
+    pts = np.asarray(pts, dtype=np.float64)
+    if len(pts) < 2:
+        return []
+    if not refs:
+        return [pts]
+    pts = resample_polyline(pts, step)
+    dmin = np.full(len(pts), np.inf)
+    for r in refs:
+        dmin = np.minimum(dmin, point_to_polyline_dist(pts, r))
+    free = hysteresis_free(dmin, overlap_high, overlap_low)
+    free = bridge_runs(pts, free, bridge_gap)
+    pieces = []
+    for s, e in true_runs(free):
+        run = pts[s:e]
+        if len(run) >= 2 and arc_length(run) >= min_free_len:
+            pieces.append(run)
+    return pieces
 
 
 @dataclass
@@ -302,7 +434,7 @@ class MergeAnnotator:
         return deduped
 
     def _is_duplicate(self, a: Lane, b: Lane) -> bool:
-        return pm.is_duplicate(a.points, b.points, self.dup_dist, self.dup_ratio)
+        return is_duplicate(a.points, b.points, self.dup_dist, self.dup_ratio)
 
     # ------------------------------------------------------------------ #
     # 병합
@@ -383,18 +515,18 @@ class MergeAnnotator:
         return others + kept
 
     def _subtract_lane(self, pts: np.ndarray, refs: List[Lane]) -> List[np.ndarray]:
-        return pm.subtract_lane(
+        return subtract_lane(
             pts, [r.points for r in refs],
             overlap_high=self.overlap_dist, overlap_low=self.overlap_low,
             min_free_len=self.min_free_len, bridge_gap=self.bridge_gap, step=self.trim_step)
 
     @staticmethod
     def _make_find(parent: List[int]):
-        return pm.make_find(parent)
+        return make_find(parent)
 
     @staticmethod
     def _arc_length(points: np.ndarray) -> float:
-        return pm.arc_length(points)
+        return arc_length(points)
 
     def _should_merge(self, a: Lane, b: Lane) -> bool:
         """두 polyline이 끝과 끝으로 이어지면 True.
@@ -423,7 +555,7 @@ class MergeAnnotator:
         return False
 
     def _bodies_parallel(self, a: Lane, b: Lane) -> bool:
-        return pm.bodies_parallel(a.points, b.points, self.parallel_overlap, self.parallel_lateral)
+        return bodies_parallel(a.points, b.points, self.parallel_overlap, self.parallel_lateral)
 
     def _merge_group(self, members: List[Lane]) -> Lane:
         """여러 polyline의 점들을 통합한 뒤 순서대로 정렬한다."""

@@ -88,8 +88,10 @@ python Figure/figure_compare.py
 `src/config.py`에 모든 경로가 정의되어 있다. **실행 전 반드시 수정해야 한다:**
 - `DATA_ROOT`: 데이터셋과 모델 출력이 저장된 루트 디렉토리
 - `DATASET_PATH`: ADE20K 형식의 데이터셋 경로 (`DATA_ROOT/ade20k`)
-- `RESULT_PATH`: JSON 예측 결과와 CSV 테이블이 저장되는 경로
-- `COCO_MERGED_ANNO_PATH`: GT COCO 어노테이션 JSON 파일 경로 (`RESULT_PATH/merged_annotations.json`)
+- `RESULT_DIR`: 출력(예측 JSON·CSV·Figure·Table) 저장 폴더명. 실행마다 바꿔 결과를 분리 보관한다 (예: `results_260624`)
+- `RESULT_PATH`: 출력 경로 (`DATA_ROOT/RESULT_DIR`)
+- `ANNO_DIR`: GT(`merged_annotations.json`)가 있는 폴더명. 기본값은 `RESULT_DIR`과 동일(결과 폴더가 GT까지 포함한 자족적 단위). 여러 실행이 공유하는 GT를 쓰려면 별도 폴더명으로 지정
+- `COCO_MERGED_ANNO_PATH`: GT COCO 어노테이션 JSON 파일 경로 (`DATA_ROOT/ANNO_DIR/merged_annotations.json`)
 - `DATA_PATH`: 데이터셋 경로 (`DATASET_PATH`와 동일)
 - `LABEL_PATH`: GT 레이블 이미지 경로 (`DATASET_PATH/annotations/validation`)
 - `COCO_ANNO_PATH`: COCO 형식 GT 어노테이션 파일 경로 (`COCO_MERGED_ANNO_PATH`와 동일)

@@ -3,8 +3,15 @@ import os
 DATA_ROOT = "/media/humpback/435806fd-079f-4ba1-ad80-109c8f6e2ec0/Ongoing/2026_LaneDetector/LaneDetector_on"
 DATASET_PATH = DATA_ROOT + "/ade20k"
 MODEL_PATH = DATA_ROOT + "/Internimage/satellite_ade20k_250925_internimage_large"
-RESULT_PATH = DATA_ROOT + "/results"
-COCO_MERGED_ANNO_PATH = DATA_ROOT + "/results/merged_annotations.json"
+
+# 출력(예측 JSON·CSV·Figure·Table) 저장 폴더명. 실행마다 바꿔 결과를 분리 보관한다.
+RESULT_DIR = "results"
+RESULT_PATH = os.path.join(DATA_ROOT, RESULT_DIR)
+
+# GT(merged_annotations.json)가 있는 폴더명. 기본은 출력 폴더(RESULT_DIR)와 동일하게 두어
+# 결과 폴더를 GT까지 포함한 자족적 단위로 만든다. 공유 GT를 쓰려면 별도 폴더명으로 지정.
+ANNO_DIR = RESULT_DIR
+COCO_MERGED_ANNO_PATH = os.path.join(DATA_ROOT, ANNO_DIR, "merged_annotations.json")
 
 # BASE_PATH = '/media/humpback/435806fd-079f-4ba1-ad80-109c8f6e2ec0/Archive/Dataset/unzips/LaneDetector_on/ade20k'
 # DATA_PATH = os.path.join(BASE_PATH)

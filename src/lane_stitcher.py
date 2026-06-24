@@ -264,7 +264,7 @@ class LaneStitcher:
             file_list = [f for f in file_list if os.path.basename(f)[:-4] in keep]
         result_jsons = [[] for _ in range(self.num_merges + 1)]  # index 0=origin, 1~3=merge1~3
 
-        pbar = tqdm(enumerate(file_list), total=len(file_list), desc=desc or 'frames')
+        pbar = tqdm(enumerate(file_list), total=len(file_list), desc=desc or 'frames', dynamic_ncols=True)
         for i, file_name in pbar:
             # if i > 10:
             #     break

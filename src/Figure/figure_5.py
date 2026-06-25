@@ -22,7 +22,7 @@ class RefinementFigure(FigureGenerator):
 
     name = "Figure_5"
     cls = fm.CENTER_LINE_ID
-    min_trim_drop = 50.0
+    min_trim_drop = 20.0
 
     def build_figure(self, image_id, path):
         pred_img = self.read_prediction(image_id)

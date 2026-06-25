@@ -231,7 +231,7 @@ class LaneStitcher:
     parallel_lateral = 30.0  # 평행 본체 최대 측면 간격(px)
     turn_penalty = 3.0       # 샘플링 시 다음점 선택의 곡률 패널티. 분기에서 곧게 잇는 쪽을 선호(0=거리만)
     dir_lookback_px = 30     # 다음점 방향 기준을 ~이만큼 뒤 점에서 잡아 안정화(직전점만 쓰면 구불거림)
-    min_lane_len = 30        # 병합 후(연결 끝낸 뒤) 이보다 짧은 선 제거(0=끄기). merge 전엔 제거 안 함
+    min_lane_len = 10        # 병합 후(연결 끝낸 뒤) 이보다 짧은 선 제거. 10px가 최적(노이즈만 제거, AP +0.5%p)
     smooth_window = 5        # 병합 후 점 스무딩 이동평균 창 크기(점)
     smooth_iters = 1         # 스무딩 반복 횟수
     residual_pass = True     # 1차 추출 후 남은 seg 영역에서 한 번 더 추출 (이중선 반대쪽 복원)

@@ -218,18 +218,20 @@ class LaneStitcher:
     id_offset = 10  # peak ID의 최소 오프셋
     overlap_thresh = 2  # 겹치는 픽셀 수
     short_length = 30
-    num_merges = 3
+    num_merges = 2  # 병합 반복 횟수(2회면 충분)
 
     # --- clean_lines(trim)·merge_lines 파라미터 ---
     trim_class_id = 1        # 겹침 trim 적용 클래스 (center_line)
     trim_step = 3.0          # trim 대상 재샘플 간격
     overlap_dist = 6.0       # 갈라짐 강임계(px)
     overlap_low = 3.0        # 갈라짐 약임계(px, hysteresis)
-    min_free_len = 20.0      # trim 후 남길 최소 조각 길이(px)
+    min_free_len = 0.0       # trim 후 남길 최소 조각 길이(px). 0=짧은 징검다리 선 보존(연결성 ↑, center_line AP20 +1%p)
     bridge_gap = 10.0        # trim 짧은 겹침 단절 브리징(px)
     parallel_overlap = 0.5   # 평행 본체 종축 겹침 임계
     parallel_lateral = 30.0  # 평행 본체 최대 측면 간격(px)
     turn_penalty = 3.0       # 샘플링 시 다음점 선택의 곡률 패널티. 분기에서 곧게 잇는 쪽을 선호(0=거리만)
+    dir_lookback_px = 30     # 다음점 방향 기준을 ~이만큼 뒤 점에서 잡아 안정화(직전점만 쓰면 구불거림)
+    min_lane_len = 30        # 병합 후(연결 끝낸 뒤) 이보다 짧은 선 제거(0=끄기). merge 전엔 제거 안 함
     smooth_window = 5        # 병합 후 점 스무딩 이동평균 창 크기(점)
     smooth_iters = 1         # 스무딩 반복 횟수
     residual_pass = True     # 1차 추출 후 남은 seg 영역에서 한 번 더 추출 (이중선 반대쪽 복원)
@@ -292,8 +294,10 @@ class LaneStitcher:
             # 4단계: merge_lines — 끝-끝 겹침 선들을 직렬 연결(stitch). 3회 반복.
             for n in range(1, self.num_merges + 1):
                 lines, line_img = self.merge_lines(lines, n - 1)
-                # 병합 완료 후 출력 단계에서 점들을 스무딩 (병합 자체는 원본 점으로 진행)
-                result_jsons[n] += self.convert_to_json(self._smoothed_copies(lines), image_id)
+                # 출력에만 짧은선 제거 적용(다음 merge 입력은 거르지 않은 lines → 연결 기회 보존)
+                # + 점 스무딩 (병합 자체는 원본 점으로 진행)
+                output = self._filter_short(lines)
+                result_jsons[n] += self.convert_to_json(self._smoothed_copies(output), image_id)
                 images_to_save[f'merge{n}'] = line_img
 
             if self._visualize:
@@ -312,6 +316,74 @@ class LaneStitcher:
         self._id_count = self.id_offset
         lines, _ = self.extract_lines(pred_img, file_name)
         return lines, self._img_shape
+
+    def _filter_short(self, lines: List[Strand]) -> List[Strand]:
+        """병합까지 끝낸 뒤 호길이가 min_lane_len 미만인 선을 제거(0이면 통과)."""
+        if self.min_lane_len <= 0:
+            return lines
+        return [l for l in lines if l.points is not None and len(l.points) >= 2
+                and arc_length(l.points) >= self.min_lane_len]
+
+    def _snapshot(self, lines: List[Strand]) -> List[Strand]:
+        """이후 단계의 in-place 변형(병합 체이닝 등)에 오염되지 않도록 점 배열을 복사한 사본."""
+        out = []
+        for l in lines:
+            if l.points is None:
+                continue
+            out.append(Strand(
+                id=l.id, peak=l.peak, class_id=l.class_id,
+                points=np.asarray(l.points).copy(),
+                ext_points=None if l.ext_points is None else np.asarray(l.ext_points).copy(),
+                src_range=l.src_range, length=l.length))
+        return out
+
+    def stage_linestrings(self, file_name: str, do_merge: bool = True, merge_iters: int = None):
+        """Figure 생성용: 한 이미지의 단계별 linestring 사본을 반환한다.
+
+        반환 dict 키:
+          image, pred_img, img_shape,
+          first(1차 추출), res(잔여 추출), combined(1차+잔여, 정제 전),
+          refined(clean_lines 후), merges(리스트: merge1..mergeN)
+        각 단계는 _snapshot으로 점을 복사해 두므로 서로 독립적이다."""
+        image, pred_img, _ = self._read_image(file_name)
+        self._img_shape = image.shape[:2]
+        self._id_count = self.id_offset
+
+        first, _ = self.extract_lines(pred_img, file_name)
+        first_snap = self._snapshot(first)
+        if self.residual_pass:
+            res, _ = self.extract_lines(self._residual_pred(pred_img, first), file_name)
+        else:
+            res = []
+        res_snap = self._snapshot(res)
+
+        combined = first + res
+        combined_snap = self._snapshot(combined)
+        refined = self._clean_lines(combined) if self.do_clean else self._reindex_lines(combined)
+        refined_snap = self._snapshot(refined)
+
+        merges = []
+        if do_merge:
+            lines = refined
+            n_iter = self.num_merges if merge_iters is None else merge_iters
+            for k in range(n_iter):
+                lines, _ = self.merge_lines(lines, k)
+                merges.append(self._snapshot(lines))
+
+        return {
+            'image': image, 'pred_img': pred_img, 'img_shape': self._img_shape,
+            'first': first_snap, 'res': res_snap, 'combined': combined_snap,
+            'refined': refined_snap, 'merges': merges,
+        }
+
+    def class_skeleton(self, pred_img: np.ndarray, class_id: int):
+        """한 클래스의 분할 블롭과 Zhang-Suen 골격(라벨맵), 블롭별 strand를 반환한다.
+        호출 전 self._img_shape가 설정돼 있어야 한다(_read_image 또는 stage_linestrings 이후)."""
+        color = self._palette[class_id]
+        pred_class_map = np.all(pred_img == color, axis=-1).astype(np.uint8)
+        self._id_count = self.id_offset
+        line_map, line_strings = self._thin_image(pred_class_map, class_id)
+        return pred_class_map, line_map, line_strings
 
     def _read_image(self, img_file: str):
         image = cv2.imread(img_file)
@@ -455,15 +527,24 @@ class LaneStitcher:
             next_index = np.argmin(score)
             if to_tail:
                 sorted_points.append(points[next_index])
-                # print(f'[sort_to_direction] next point: {sorted_points[-1]}')
-                direction = sorted_points[-1] - last_point
             else:
                 sorted_points.insert(0, points[next_index])
-                # print(f'[sort_to_direction] next point: {sorted_points[0]}')
-                direction = sorted_points[0] - last_point
+            # 방향 기준: 바로 직전 점이 아니라 ~dir_lookback_px 뒤 점 → 끝점 (안정적 방향)
+            direction = self._lookback_direction(sorted_points, to_tail, stride)
             distances = np.sqrt(np.sum((points - last_point) ** 2, axis=1))
             points = points[distances >= stride]
         return sorted_points
+
+    def _lookback_direction(self, sorted_points: List[np.ndarray], to_tail: bool,
+                            stride: int) -> np.ndarray:
+        """현재 끝점과 ~dir_lookback_px 뒤 점을 잇는 방향 벡터(점이 부족하면 가능한 만큼)."""
+        n = len(sorted_points)
+        back = max(1, round(self.dir_lookback_px / max(stride, 1)))
+        if to_tail:
+            tip, ref = sorted_points[-1], sorted_points[max(0, n - 1 - back)]
+        else:
+            tip, ref = sorted_points[0], sorted_points[min(n - 1, back)]
+        return np.asarray(tip) - np.asarray(ref)
 
     def _extrapolate_line(self, line_string: Strand, extend_len: int, stride: int) -> Strand:
         points = line_string.points  # (N,2) 배열

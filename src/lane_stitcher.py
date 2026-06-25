@@ -243,7 +243,7 @@ class LaneStitcher:
     trim_step = 3.0          # trim 대상 재샘플 간격
     overlap_dist = 6.0       # 갈라짐 강임계(px)
     overlap_low = 3.0        # 갈라짐 약임계(px, hysteresis)
-    min_diverge_len = 20.0   # strong(>overlap_dist)이 이 호길이 이상 연속될 때만 갈라짐 인정(0=한 점이면 인정)
+    min_diverge_len = 15.0   # strong(>overlap_dist)이 이 호길이 이상 연속될 때만 갈라짐 인정(검증 최적값)
     min_free_len = 0.0       # trim 후 남길 최소 조각 길이(px). 0=짧은 징검다리 선 보존(연결성 ↑, center_line AP20 +1%p)
     bridge_gap = 10.0        # trim 짧은 겹침 단절 브리징(px)
     parallel_overlap = 0.5   # 평행 본체 종축 겹침 임계

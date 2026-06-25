@@ -122,15 +122,30 @@ def bodies_parallel(a: np.ndarray, b: np.ndarray, overlap_thr: float, lateral_th
     return overlap > overlap_thr and lateral < lateral_thr
 
 
-def hysteresis_free(dmin: np.ndarray, high: float, low: float) -> np.ndarray:
-    """Canny 이중 임계로 free(겹치지 않음) 마스크 생성."""
+def hysteresis_free(dmin: np.ndarray, pts: np.ndarray, high: float, low: float,
+                    min_diverge_len: float) -> np.ndarray:
+    """Canny 이중 임계로 free(겹치지 않음) 마스크 생성.
+
+    weak(>low) 구간은 그 안에 strong(>high)이 호길이 min_diverge_len 이상 '연속으로'
+    유지될 때만 free로 인정한다. strong 픽셀 하나만으로 weak 구간 전체가 살아남아
+    조각난 이중선이 생기는 것을 막는다(min_diverge_len=0이면 기존처럼 strong 한 점이면 인정)."""
     strong = dmin > high
     weak = dmin > low
     free = np.zeros(len(dmin), dtype=bool)
     for s, e in true_runs(weak):
-        if strong[s:e].any():
+        if _has_sustained_strong(strong[s:e], pts[s:e], min_diverge_len):
             free[s:e] = True
     return free
+
+
+def _has_sustained_strong(strong_run: np.ndarray, pts_run: np.ndarray, min_len: float) -> bool:
+    """strong 마스크 안에 호길이 min_len 이상인 연속 True 구간이 하나라도 있는지."""
+    if min_len <= 0:
+        return bool(strong_run.any())
+    for a, b in true_runs(strong_run):
+        if arc_length(pts_run[a:b]) >= min_len:
+            return True
+    return False
 
 
 def bridge_runs(pts: np.ndarray, free: np.ndarray, bridge_gap: float) -> np.ndarray:
@@ -143,7 +158,8 @@ def bridge_runs(pts: np.ndarray, free: np.ndarray, bridge_gap: float) -> np.ndar
     return free
 
 
-def subtract_lane(pts, refs, *, overlap_high, overlap_low, min_free_len, bridge_gap, step):
+def subtract_lane(pts, refs, *, overlap_high, overlap_low, min_free_len, bridge_gap, step,
+                  min_diverge_len=0.0):
     """pts에서 기준선(refs) 중 하나라도 측면거리 이내인 점을 제거하고 남은 구간 리스트 반환."""
     pts = np.asarray(pts, dtype=np.float64)
     if len(pts) < 2:
@@ -154,7 +170,7 @@ def subtract_lane(pts, refs, *, overlap_high, overlap_low, min_free_len, bridge_
     dmin = np.full(len(pts), np.inf)
     for r in refs:
         dmin = np.minimum(dmin, point_to_polyline_dist(pts, r))
-    free = hysteresis_free(dmin, overlap_high, overlap_low)
+    free = hysteresis_free(dmin, pts, overlap_high, overlap_low, min_diverge_len)
     free = bridge_runs(pts, free, bridge_gap)
     pieces = []
     for s, e in true_runs(free):
@@ -164,7 +180,8 @@ def subtract_lane(pts, refs, *, overlap_high, overlap_low, min_free_len, bridge_
     return pieces
 
 
-def trim_overlaps(polys, *, overlap_high, overlap_low, min_free_len, bridge_gap, step):
+def trim_overlaps(polys, *, overlap_high, overlap_low, min_free_len, bridge_gap, step,
+                  min_diverge_len=0.0):
     """같은 클래스 폴리라인 리스트를 길이 내림차순으로 trim한다.
     각 결과 조각을 (원본 인덱스, 점배열)로 반환해 호출측이 메타데이터를 매핑할 수 있게 한다."""
     out = []
@@ -172,7 +189,8 @@ def trim_overlaps(polys, *, overlap_high, overlap_low, min_free_len, bridge_gap,
     for i in sorted(range(len(polys)), key=lambda k: arc_length(polys[k]), reverse=True):
         for piece in subtract_lane(polys[i], kept, overlap_high=overlap_high,
                                    overlap_low=overlap_low, min_free_len=min_free_len,
-                                   bridge_gap=bridge_gap, step=step):
+                                   bridge_gap=bridge_gap, step=step,
+                                   min_diverge_len=min_diverge_len):
             kept.append(piece)
             out.append((i, piece))
     return out
@@ -225,6 +243,7 @@ class LaneStitcher:
     trim_step = 3.0          # trim 대상 재샘플 간격
     overlap_dist = 6.0       # 갈라짐 강임계(px)
     overlap_low = 3.0        # 갈라짐 약임계(px, hysteresis)
+    min_diverge_len = 20.0   # strong(>overlap_dist)이 이 호길이 이상 연속될 때만 갈라짐 인정(0=한 점이면 인정)
     min_free_len = 0.0       # trim 후 남길 최소 조각 길이(px). 0=짧은 징검다리 선 보존(연결성 ↑, center_line AP20 +1%p)
     bridge_gap = 10.0        # trim 짧은 겹침 단절 브리징(px)
     parallel_overlap = 0.5   # 평행 본체 종축 겹침 임계
@@ -602,7 +621,8 @@ class LaneStitcher:
         for src_i, pts in trim_overlaps(
                 [t.points for t in targets],
                 overlap_high=self.overlap_dist, overlap_low=self.overlap_low,
-                min_free_len=self.min_free_len, bridge_gap=self.bridge_gap, step=self.trim_step):
+                min_free_len=self.min_free_len, bridge_gap=self.bridge_gap, step=self.trim_step,
+                min_diverge_len=self.min_diverge_len):
             base = targets[src_i]
             trimmed.append(Strand(id=base.id, peak=base.peak, class_id=self.trim_class_id,
                                   points=np.rint(pts).astype(np.int32),

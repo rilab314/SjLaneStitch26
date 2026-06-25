@@ -17,7 +17,6 @@ if _SRC not in sys.path:
 import config as cfg
 import figure_render as fr
 from figure_base import FigureGenerator
-from util import draw_annotations_on_image
 
 
 class ExcludedClassFigure(FigureGenerator):
@@ -44,7 +43,7 @@ class ExcludedClassFigure(FigureGenerator):
         anns = [a for a in gt if a.get("category_id") == class_id]
         if len(anns) < self.min_instances:
             return None
-        gt_panel = draw_annotations_on_image(base.copy(), anns, [])
+        gt_panel = fr.draw_annotations_on_image(base.copy(), anns, [])
         return fr.concat_horizontal([gt_panel, self.pred_panel(base, seg, class_id)])
 
     def pred_panel(self, base, seg, class_id):

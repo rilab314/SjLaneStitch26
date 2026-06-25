@@ -7,10 +7,11 @@ import os
 
 import cv2
 import numpy as np
+from pycocotools import mask as mask_util
 
-_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
-if _THIS_DIR not in sys.path:
-    sys.path.insert(0, _THIS_DIR)
+_SRC = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # Figure/ → src
+if _SRC not in sys.path:
+    sys.path.insert(0, _SRC)
 
 import config as cfg
 
@@ -153,3 +154,32 @@ def _apply_render_colors(out, pred_img, exclude_ids):
         render = cfg.RENDER_ID2BGR.get(class_id)
         if render is not None and tuple(render) != tuple(original):
             out[np.all(pred_img == original, axis=-1)] = render
+
+
+def draw_annotations_on_image(img, annotations, exclude_ids):
+    """RLE/폴리곤 어노테이션을 클래스 렌더색으로 이미지 위에 채워 그린다(GT/예측 overlay)."""
+    for ann in annotations:
+        cat_id = ann.get("category_id")
+        if cat_id in exclude_ids:
+            continue
+        seg = ann.get("segmentation")
+        if seg is None:
+            continue
+        color = cfg.RENDER_ID2BGR.get(cat_id, cfg.ID2BGR.get(cat_id, WHITE))
+        _fill_segmentation(img, seg, color)
+    return img
+
+
+def _fill_segmentation(img, seg, color):
+    """RLE(dict) 또는 폴리곤(list) segmentation을 색으로 채운다."""
+    if isinstance(seg, dict) and "counts" in seg:
+        mask = mask_util.decode(seg)
+        if mask.ndim == 3:
+            mask = mask[:, :, 0]
+        img[mask > 0] = color
+    elif isinstance(seg, list):
+        polys = [seg] if seg and isinstance(seg[0], (int, float)) else seg
+        for poly in polys:
+            if len(poly) >= 6:
+                pts = np.array(poly).reshape((-1, 1, 2)).astype(np.int32)
+                cv2.fillPoly(img, [pts], color)

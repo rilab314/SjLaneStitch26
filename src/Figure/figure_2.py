@@ -15,7 +15,6 @@ import config as cfg
 import figure_render as fr
 import figure_metrics as fm
 from figure_base import FigureGenerator
-from util import draw_annotations_on_image
 
 
 class PipelineFigure(FigureGenerator):
@@ -58,7 +57,7 @@ class PipelineFigure(FigureGenerator):
 
     def gt_panel(self, stage, image_id):
         """원본 영상에 GT 어노테이션을 오버레이한 패널."""
-        return draw_annotations_on_image(
+        return fr.draw_annotations_on_image(
             stage["image"].copy(), self.gt_annotations(image_id), cfg.EXCLUDE_IDS)
 
 

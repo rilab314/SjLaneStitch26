@@ -25,6 +25,7 @@ LaneStitcher(lane_stitcher.py)의 끝점 겹침 병합 아이디어를 참고하
 """
 
 import os
+import sys
 import json
 import time
 from dataclasses import dataclass, field
@@ -35,6 +36,8 @@ import numpy as np
 from pycocotools import mask as maskUtils
 from tqdm import tqdm
 
+# 공유 그리기 함수(figure_render)는 Figure/ 하위에 있으므로 경로 추가
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "Figure"))
 import config as cfg
 import figure_render as fr
 

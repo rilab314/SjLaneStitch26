@@ -25,6 +25,7 @@ LaneStitcher(lane_stitcher.py)의 끝점 겹침 병합 아이디어를 참고하
 """
 
 import os
+import sys
 import json
 import time
 from dataclasses import dataclass, field
@@ -35,7 +36,10 @@ import numpy as np
 from pycocotools import mask as maskUtils
 from tqdm import tqdm
 
+# 공유 그리기 함수(figure_render)는 Figure/ 하위에 있으므로 경로 추가
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "Figure"))
 import config as cfg
+import figure_render as fr
 
 
 # ====================================================================== #
@@ -614,15 +618,9 @@ class MergeAnnotator:
 
     def _draw_lanes(self, canvas, lanes: List[Lane], title: str):
         for lane in lanes:
-            # COCO segmentation과 동일하게 두께 3으로 그린다 (클래스별 색상)
+            # COCO segmentation과 동일하게 두께 3, 양 끝에 동그란 점 (figure와 공유 함수)
             color = cfg.ID2BGR.get(lane.category_id, (255, 255, 255))
-            pts = np.rint(lane.points).astype(np.int32).reshape((-1, 1, 2))
-            cv2.polylines(canvas, [pts], isClosed=False, color=color, thickness=self.mask_thickness)
-            # 양 끝점 표시
-            for tip in (lane.points[0], lane.points[-1]):
-                p = (int(round(tip[0])), int(round(tip[1])))
-                cv2.circle(canvas, p, radius=5, color=(255, 255, 255), thickness=-1)
-                cv2.circle(canvas, p, radius=5, color=color, thickness=2)
+            fr.draw_strand(canvas, lane.points, color, thickness=self.mask_thickness)
         cv2.putText(canvas, title, (10, 30), cv2.FONT_HERSHEY_SIMPLEX,
                     0.9, (255, 255, 255), 2)
         return canvas

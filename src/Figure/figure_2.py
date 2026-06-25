@@ -1,166 +1,65 @@
+"""Figure 2 — 파이프라인 개요 (1×5 가로 콜라주).
+
+패널: (a) 원본+GT | (b) 분할(8클래스) | (c) 초기 linestring(정제 전) | (d) 정제 후 | (e) 최종 병합.
+center_line 평행 겹침 트리밍이 뚜렷한(제거 ≥ 50px) 프레임만 출력한다.
+"""
 import os
 import sys
-import cv2
-import numpy as np
-from tqdm import tqdm
 
-current_dir = os.path.dirname(os.path.abspath(__file__))
-project_root = os.path.abspath(os.path.join(current_dir, "../../"))
-if project_root not in sys.path:
-    sys.path.append(project_root)
+_CUR = os.path.dirname(os.path.abspath(__file__))
+_SRC = os.path.abspath(os.path.join(_CUR, ".."))
+if _SRC not in sys.path:
+    sys.path.insert(0, _SRC)
 
-import src.config as cfg
-from src.util import (
-    find_best_pred_json_path,
-    load_json,
-    group_annotations_by_image,
-    draw_annotations_on_image
-)
-
-def main():
-    """Main execution flow for generating Figure 2 collage."""
-    # 1. Configuration & Paths
-    csv_path = os.path.join(cfg.RESULT_PATH, 'total_performance.csv')
-    model_name, merge_count, best_pred_path = find_best_pred_json_path(csv_path)
-    
-    if model_name is None:
-        model_name = "internimage_large"
-        merge_count = 3
-        result_subdir = os.path.join(cfg.RESULT_PATH, "satellite_ade20k_250925_" + model_name, "thick=3,stride=10,extend=20")
-        best_pred_path = os.path.join(result_subdir, "coco_pred_instances_merge3.json")
-    else:
-        result_subdir = os.path.dirname(best_pred_path)
-
-    model_dir = cfg.MODEL_PREFIX + model_name
-    model_type = "Internimage" if "internimage" in model_name.lower() else "mask2former"
-    pred_dir = os.path.join(cfg.DATA_ROOT, model_type, model_dir, 'prediction')
-
-    paths = {
-        'json_gt': cfg.COCO_ANNO_PATH,
-        'json_origin': os.path.join(result_subdir, "coco_pred_instances_origin.json"),
-        'json_merged': best_pred_path,
-        'pred_dir': pred_dir,
-        'original_img_dir': os.path.join(cfg.DATASET_PATH, 'images', 'validation'),
-        'output_dir': os.path.join(cfg.RESULT_PATH, 'Figure', 'Figure_2')
-    }
-
-    viz_settings = {
-        'gap': 20,
-        'gap_color': 0, # Black
-        'exclude_ids': cfg.EXCLUDE_IDS,
-        'font': cv2.FONT_HERSHEY_SIMPLEX,
-        'font_scale': 1.2,
-        'font_thickness': 3
-    }
-
-    print("Initializing Figure 2 generation...")
-    os.makedirs(paths['output_dir'], exist_ok=True)
-
-    # 2. Load all necessary data
-    gt_data = load_json(paths['json_gt'])
-    origin_anns = load_json(paths['json_origin'])
-    merged_anns = load_json(paths['json_merged'])
-
-    # 3. Group annotations by image_id for efficient lookup
-    gt_map = group_annotations_by_image(gt_data['annotations'])
-    origin_map = group_annotations_by_image(origin_anns)
-    merged_map = group_annotations_by_image(merged_anns)
-
-    # 4. Process images and create collages
-    for img_info in tqdm(gt_data['images'], desc="Generating collages"):
-        img_id = img_info['id']
-        file_name = img_info['file_name']
-        img_w, img_h = img_info['width'], img_info['height']
-
-        # (a) Original image + GT annotations
-        img_a = generate_a_gt_overlay(file_name, gt_map.get(img_id, []), paths['original_img_dir'], viz_settings['exclude_ids'])
-        
-        # (b) Pixel-wise segmentation results
-        img_b = generate_b_segmentation(file_name, paths['pred_dir'], viz_settings['exclude_ids'])
-        
-        # (c) Initial vectorized linestrings (from skeletonization)
-        img_c = generate_vectorized_mask(img_h, img_w, origin_map.get(img_id, []), viz_settings['exclude_ids'])
-        
-        # (d) Final merged linestrings
-        img_d = generate_vectorized_mask(img_h, img_w, merged_map.get(img_id, []), viz_settings['exclude_ids'])
-
-        if any(img is None for img in [img_a, img_b, img_c, img_d]):
-            continue
-
-        # Combine into 2x2 collage
-        collage = create_2x2_collage(img_a, img_b, img_c, img_d, gap=viz_settings['gap'], gap_color=viz_settings['gap_color'])
-        
-        # Save results
-        save_path = os.path.join(paths['output_dir'], f"{os.path.splitext(file_name)[0]}.jpg")
-        cv2.imwrite(save_path, collage)
-
-    print(f"Done! Figure 2 collages are saved in: {paths['output_dir']}")
+import config as cfg
+import figure_render as fr
+import figure_metrics as fm
+from figure_base import FigureGenerator
 
 
-# ================= Helper Functions =================
+class PipelineFigure(FigureGenerator):
+    """한 장면이 분할→벡터화→정제→병합 단계를 거치는 흐름을 1×5로 보인다."""
 
-def generate_a_gt_overlay(file_name, anns, img_dir, exclude_ids):
-    """Draw Ground Truth polygons on original image."""
-    img_path = os.path.join(img_dir, file_name)
-    img = cv2.imread(img_path)
-    if img is None:
-        return None
-    return draw_annotations_on_image(img, anns, exclude_ids)
+    name = "Figure_2"
+    min_trim_drop = 20.0
+    ap20_min = 0.50
 
-def generate_b_segmentation(file_name, pred_dir, exclude_ids):
-    """Load segmentation prediction and set background/excluded classes to white."""
-    pred_path = os.path.join(pred_dir, file_name)
-    if not os.path.exists(pred_path):
-        base = os.path.splitext(file_name)[0]
-        pred_path = os.path.join(pred_dir, base + ".png")
-        
-    img = cv2.imread(pred_path)
-    if img is None:
-        return None
+    def build_figure(self, image_id, path):
+        pred_img = self.read_prediction(image_id)
+        if not fm.has_color(pred_img, cfg.ID2BGR.get(fm.CENTER_LINE_ID)):
+            return None
+        stage = self._detector.stage_linestrings(
+            path, do_merge=True, merge_iters=self._detector.num_merges)
+        trim = fm.measure_trim(stage)
+        if trim["len_drop"] < self.min_trim_drop:
+            return None
+        if not self.is_good_frame(stage, image_id):
+            return None
+        return self.compose(stage, image_id), f"_drop{int(trim['len_drop'])}"
 
-    # Set background (ignore/black) to white
-    black_mask = np.all(img == [0, 0, 0], axis=-1)
-    img[black_mask] = [255, 255, 255]
+    def is_good_frame(self, stage, image_id):
+        """프레임 AP20이 기준 이상인 깔끔한 예시인지 판정."""
+        pred_anns = self._detector.convert_to_json(self.final_merge(stage), image_id)
+        ap20 = fm.measure_frame_ap20(self.gt_annotations(image_id), pred_anns, image_id)
+        return ap20 is not None and ap20 > self.ap20_min
 
-    # Paint excluded categories white to hide them
-    for cat_id in exclude_ids:
-        if cat_id in cfg.ID2BGR:
-            color = cfg.ID2BGR[cat_id]
-            mask = np.all(img == color, axis=-1)
-            img[mask] = [255, 255, 255]
-        if hasattr(cfg, 'RENDER_ID2BGR') and cat_id in cfg.RENDER_ID2BGR:
-            color = cfg.RENDER_ID2BGR[cat_id]
-            mask = np.all(img == color, axis=-1)
-            img[mask] = [255, 255, 255]
+    def compose(self, stage, image_id):
+        """다섯 패널을 흰색 간격으로 가로 결합한다."""
+        height, width = stage["img_shape"]
+        panels = [
+            self.gt_panel(stage, image_id),
+            fr.recolor_segmentation(stage["pred_img"], cfg.EXCLUDE_IDS),
+            fr.draw_strands(fr.make_white_canvas(height, width), stage["combined"]),
+            fr.draw_strands(fr.make_white_canvas(height, width), stage["refined"]),
+            fr.draw_strands(fr.make_white_canvas(height, width), self.final_merge(stage)),
+        ]
+        return fr.concat_horizontal(panels)
 
-    # Replace original class colors with their render colors if they differ
-    for cat_id, orig_color in cfg.ID2BGR.items():
-        if cat_id in exclude_ids or cat_id == 0:
-            continue
-        render_color = cfg.RENDER_ID2BGR.get(cat_id)
-        if render_color is not None and render_color != orig_color:
-            mask = np.all(img == orig_color, axis=-1)
-            img[mask] = render_color
+    def gt_panel(self, stage, image_id):
+        """원본 영상에 GT 어노테이션을 오버레이한 패널."""
+        return fr.draw_annotations_on_image(
+            stage["image"].copy(), self.gt_annotations(image_id), cfg.EXCLUDE_IDS)
 
-    return img
-
-def generate_vectorized_mask(h, w, anns, exclude_ids):
-    """Render vectorized linestrings from JSON on a white background."""
-    img = np.full((h, w, 3), 255, dtype=np.uint8)
-    return draw_annotations_on_image(img, anns, exclude_ids)
-
-def create_2x2_collage(img_a, img_b, img_c, img_d, gap=20, gap_color=0):
-    """Combine four images into a 2x2 grid with gaps."""
-    h, w, _ = img_a.shape
-    collage_h = h * 2 + gap
-    collage_w = w * 2 + gap
-    collage = np.full((collage_h, collage_w, 3), gap_color, dtype=np.uint8)
-    
-    collage[0:h, 0:w] = img_a
-    collage[0:h, w+gap : w*2+gap] = img_b
-    collage[h+gap : h*2+gap, 0:w] = img_c
-    collage[h+gap : h*2+gap, w+gap : w*2+gap] = img_d
-    return collage
 
 if __name__ == "__main__":
-    main()
+    PipelineFigure().run()

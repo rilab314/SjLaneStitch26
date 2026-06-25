@@ -9,3 +9,5 @@ __pycache__/
 *.yml
 config.py
 assets/
+manuscript_*
+FILTER_*

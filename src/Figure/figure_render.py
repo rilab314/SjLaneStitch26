@@ -156,6 +156,20 @@ def _apply_render_colors(out, pred_img, exclude_ids):
             out[np.all(pred_img == original, axis=-1)] = render
 
 
+def overlay_segmentation(image, pred_img, exclude_ids, alpha=0.5):
+    """원본 영상 위에 분할 예측을 클래스 렌더색으로 반투명 오버레이한다(제외 클래스 제외)."""
+    out = image.copy()
+    for class_id, original in cfg.ID2BGR.items():
+        if class_id == 0 or class_id in exclude_ids:
+            continue
+        mask = np.all(pred_img == original, axis=-1)
+        if not mask.any():
+            continue
+        render = np.array(cfg.RENDER_ID2BGR.get(class_id, original), dtype=np.float32)
+        out[mask] = (alpha * render + (1.0 - alpha) * out[mask]).astype(np.uint8)
+    return out
+
+
 def draw_annotations_on_image(img, annotations, exclude_ids):
     """RLE/폴리곤 어노테이션을 클래스 렌더색으로 이미지 위에 채워 그린다(GT/예측 overlay)."""
     for ann in annotations:

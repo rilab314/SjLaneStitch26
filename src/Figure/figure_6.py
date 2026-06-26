@@ -1,6 +1,7 @@
-"""Figure 6 — 병합: 외삽 교차 + 평행 거부 + 직렬 체이닝 (1×2 가로 콜라주).
+"""Figure 6 — 병합: 외삽 교차 + 평행 거부 + 직렬 체이닝 (1×3 가로 콜라주).
 
-패널: (a) 정제 단편 본체(클래스색 + 끝점 점) + 끝점 바깥쪽 외삽만 빨간선 | (b) 직렬 연결된 최종 결과.
+패널: (a) 정제 단편 본체(끊긴 상태가 보이도록) | (b) 본체 + 끝점 바깥쪽 외삽(연회색)
+      | (c) 직렬 연결된 최종 결과.
 단편이 실제로 이어지고(joined ≥ 3) center_line 평행 거부가 일어나는 프레임만 출력한다.
 """
 import os
@@ -18,11 +19,11 @@ from lane_stitcher import bodies_parallel
 
 
 class MergingFigure(FigureGenerator):
-    """끝–끝 직렬 체이닝과 평행 이중선 오병합 방지를 1×2로 보인다."""
+    """merge 전 단편 | 외삽 | merge 후를 1×3으로 보인다(끝–끝 체이닝과 평행 오병합 방지)."""
 
     name = "Figure_6"
     cls = fm.CENTER_LINE_ID
-    red = (0, 0, 255)
+    ext_color = (153, 136, 119)   # LightSlateGray(BGR) — 연한 청회색, 어떤 클래스 렌더색과도 안 겹침
     min_joined = 3
 
     def build_figure(self, image_id, path):
@@ -62,20 +63,22 @@ class MergingFigure(FigureGenerator):
         return count
 
     def compose(self, stage):
-        """두 패널을 검은 여백으로 가로 결합한다."""
+        """merge 전 | 외삽 | merge 후 세 패널을 검은 여백으로 가로 결합한다."""
         height, width = stage["img_shape"]
+        refined = stage["refined"]
         final = self._detector._smoothed_copies(self.final_merge(stage))
         panels = [
-            self.extension_panel(stage["refined"], height, width),
+            fr.draw_strands(fr.make_white_canvas(height, width), refined, dots=True),
+            self.extension_panel(refined, height, width),
             fr.draw_strands(fr.make_white_canvas(height, width), final, dots=True),
         ]
         return fr.concat_horizontal(panels)
 
     def extension_panel(self, refined, height, width):
-        """(a) 단편 본체(클래스색 + 끝점 점) 위에 끝점 바깥쪽 외삽만 빨간선으로."""
+        """(b) 단편 본체(클래스색 + 끝점 점) 위에 끝점 바깥쪽 외삽만 연회색선으로."""
         canvas = fr.draw_strands(fr.make_white_canvas(height, width), refined, dots=True)
         for strand in refined:
-            fr.draw_extension(canvas, strand.ext_points, strand.src_range, self.red)
+            fr.draw_extension(canvas, strand.ext_points, strand.src_range, self.ext_color)
         return canvas
 
 

@@ -1,7 +1,8 @@
-"""Figure 5 — 정제 단계: center_line 평행 겹침 트리밍 (1×2 가로 콜라주). ★핵심 신규★
+"""Figure 5 — 정제 단계: center_line 평행 겹침 트리밍 전후 비교 (1×3 가로 콜라주). ★핵심 신규★
 
-패널: (a) 정제 전 center_line(이중선 겹침+지그재그) | (b) 트리밍 후(겹친 본체 절단, 분기 가지 보존).
-center_line 트리밍이 뚜렷한(제거 ≥ 50px) 프레임만 출력하며, 파일명에 제거 길이를 기록한다.
+패널: (a) 원본 영상 + 분할 오버레이(장면 맥락) | (b) 정제 전 center_line(겹친 중복 본체)
+      | (c) 트리밍 후(중복 본체 절단, 분기 가지 보존).
+center_line 트리밍 제거량 ≥ 20px 인 프레임만 출력하며, 파일명에 제거 길이를 기록한다.
 """
 import os
 import sys
@@ -18,7 +19,7 @@ from figure_base import FigureGenerator
 
 
 class RefinementFigure(FigureGenerator):
-    """center_line 평행 겹침 트리밍 전/후를 1×2로 비교한다."""
+    """장면 맥락(원본+분할) | 정제 전 | 정제 후 center_line을 1×3으로 비교한다."""
 
     name = "Figure_5"
     cls = fm.CENTER_LINE_ID
@@ -35,13 +36,15 @@ class RefinementFigure(FigureGenerator):
         return self.compose(stage), f"_drop{int(trim['len_drop'])}"
 
     def compose(self, stage):
-        """정제 전/후 center_line 패널을 흰색 간격으로 가로 결합한다."""
+        """장면 맥락 + 정제 전/후 center_line 패널을 검은 여백으로 가로 결합한다."""
         height, width = stage["img_shape"]
+        context = fr.overlay_segmentation(
+            stage["image"], stage["pred_img"], cfg.EXCLUDE_IDS, alpha=1.0)
         before = fr.draw_strands(
             fr.make_white_canvas(height, width), stage["combined"], only_class=self.cls)
         after = fr.draw_strands(
             fr.make_white_canvas(height, width), stage["refined"], only_class=self.cls)
-        return fr.concat_horizontal([before, after])
+        return fr.concat_horizontal([context, before, after])
 
 
 if __name__ == "__main__":

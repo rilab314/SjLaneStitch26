@@ -1,6 +1,6 @@
-"""Figure 3 — 제외 클래스(guiding_line·safety_zone)의 GT vs 분할 비교.
+"""Figure 3 — 제외 클래스(guiding_line·safety_zone·bicycle_lane)의 GT vs 분할 비교.
 
-클래스마다 [원본+GT | 원본+예측] 가로쌍을 만들고, 두 클래스가 모두 충분하면 세로로 합친다.
+클래스마다 [원본+GT | 원본+예측] 가로쌍을 만들고, 여러 클래스가 충분하면 세로로 합친다.
 GT 인스턴스가 3개 이상인 클래스만 대상으로 한다.
 """
 import os
@@ -23,7 +23,7 @@ class ExcludedClassFigure(FigureGenerator):
     """평가에서 제외한 클래스의 GT와 분할 결과를 나란히 비교한다."""
 
     name = "Figure_3"
-    target_ids = (8, 10)   # guiding_line, safety_zone
+    target_ids = (8, 10, 11)   # guiding_line, safety_zone, bicycle_lane
     min_instances = 3
 
     def build_figure(self, image_id, path):

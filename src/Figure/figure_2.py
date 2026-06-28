@@ -21,7 +21,7 @@ class PipelineFigure(FigureGenerator):
     """한 장면이 분할→벡터화→정제→병합 단계를 거치는 흐름을 1×5로 보인다."""
 
     name = "Figure_2"
-    min_trim_drop = 20.0
+    min_trim_drop = 50.0   # center_line 트리밍이 강한(제거 ≥ 50px) 프레임만
     ap20_min = 0.50
 
     def build_figure(self, image_id, path):

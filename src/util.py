@@ -26,14 +26,15 @@ def find_best_pred_json_path(csv_path):
     t = int(best_row['thicknesses'])
     s = int(best_row['sample_strides'])
     e = int(best_row['extend_lens'])
-    
+    tp = int(best_row['turn_penalties'])
+
     print(f"Best target: model={model_name}, merge_count={merge_count}, AP20={best_row['AP20']:.6f}")
-    
+
     model_dir = cfg.MODEL_PREFIX + model_name
-    param_dir = f"thick={t},stride={s},extend={e}"
+    param_dir = f"thick={t},stride={s},extend={e},turn={tp}"
     filename = "origin" if merge_count == 0 else f"merge{merge_count}"
     pred_json_path = os.path.join(cfg.RESULT_PATH, model_dir, param_dir, f"coco_pred_instances_{filename}.json")
-    
+
     return model_name, merge_count, pred_json_path
 
 

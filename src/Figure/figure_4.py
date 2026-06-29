@@ -21,7 +21,7 @@ from figure_base import FigureGenerator
 
 
 class VectorizationFigure(FigureGenerator):
-    """center_line의 블롭→골격→샘플점→잔여복원 벡터화 과정을 1×4로 보인다."""
+    """center_line의 블롭→샘플점→잔여복원 벡터화 과정을 1×3으로 보인다."""
 
     name = "Figure_4"
     cls = fm.CENTER_LINE_ID

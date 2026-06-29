@@ -2,7 +2,7 @@
 
 패널: (a) 원본 영상 + 분할 오버레이(장면 맥락) | (b) 정제 전 center_line(겹친 중복 본체)
       | (c) 트리밍 후(중복 본체 절단, 분기 가지 보존).
-center_line 트리밍 제거량 ≥ 20px 인 프레임만 출력하며, 파일명에 제거 길이를 기록한다.
+center_line 트리밍 제거량 ≥ 20px 인 프레임만 출력한다.
 """
 import os
 import sys
@@ -33,7 +33,7 @@ class RefinementFigure(FigureGenerator):
         trim = fm.measure_trim(stage)
         if trim["len_drop"] < self.min_trim_drop:
             return None
-        return self.compose(stage), f"_drop{int(trim['len_drop'])}"
+        return self.compose(stage), ""
 
     def compose(self, stage):
         """장면 맥락 + 정제 전/후 center_line 패널을 검은 여백으로 가로 결합한다."""

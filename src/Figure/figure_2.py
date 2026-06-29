@@ -1,6 +1,6 @@
 """Figure 2 — 파이프라인 개요 (1×5 가로 콜라주).
 
-패널: (a) 원본+GT | (b) 분할(8클래스) | (c) 초기 linestring(정제 전) | (d) 정제 후 | (e) 최종 병합.
+패널: (a) 원본+GT | (b) 분할(평가 클래스) | (c) 초기 linestring(정제 전) | (d) 정제 후 | (e) 최종 병합.
 center_line 평행 겹침 트리밍이 뚜렷한(제거 ≥ 50px) 프레임만 출력한다.
 """
 import os
@@ -35,7 +35,7 @@ class PipelineFigure(FigureGenerator):
             return None
         if not self.is_good_frame(stage, image_id):
             return None
-        return self.compose(stage, image_id), f"_drop{int(trim['len_drop'])}"
+        return self.compose(stage, image_id), ""
 
     def is_good_frame(self, stage, image_id):
         """프레임 AP20이 기준 이상인 깔끔한 예시인지 판정."""

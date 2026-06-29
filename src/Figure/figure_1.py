@@ -31,7 +31,7 @@ class ResultShowcaseFigure(FigureGenerator):
             return None
         canvas = stage["image"].copy()
         fr.draw_strands(canvas, final, dots=True)
-        return canvas, f"_ap{ap20:.2f}"
+        return canvas, ""
 
     def frame_ap20(self, image_id, final):
         """최종 linestring을 RLE 예측으로 변환해 프레임 AP20을 계산."""

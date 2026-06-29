@@ -157,7 +157,7 @@ def _apply_render_colors(out, pred_img, exclude_ids):
 
 
 def overlay_segmentation(image, pred_img, exclude_ids, alpha=0.5):
-    """원본 영상 위에 분할 예측을 클래스 렌더색으로 반투명 오버레이한다(제외 클래스 제외)."""
+    """원본 영상 위에 분할 예측을 클래스 렌더색으로 오버레이한다(alpha=불투명도, 제외 클래스 제외)."""
     out = image.copy()
     for class_id, original in cfg.ID2BGR.items():
         if class_id == 0 or class_id in exclude_ids:

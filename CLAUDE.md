@@ -44,18 +44,25 @@ python run_experiments.py
 # 창 표시·시각화 콜라주 생략하고 성능평가만 빠르게 실행 (고속 모드)
 python run_experiments.py --fast
 
-# 1. 테이블(Tables) 생성 스크립트 실행
-# 체크포인트를 로드하여 모델별 파라미터 개수를 계산하고 num_params.csv 생성
+# 1. 테이블(Tables) 생성 스크립트 실행 — 논문 Table 1~5에 1:1 대응, 공통 헬퍼는 Table/table_common.py
+# 체크포인트를 로드하여 모델별 파라미터 개수를 계산하고 num_params.csv 생성 (Table 1의 Params 열 전제)
 python Table/num_params.py
 
-# 단일 실행 결과 평가 및 table_1.csv 생성
+# Table 1: 모델 비교 (segmentation vs merge×1), 6줄 → table_1.csv
 python Table/table_1.py
 
-# 최적 모델/파라미터를 찾고 table_2.csv (클래스별 지표)와 table_3.csv (클래스별 심화 지표) 생성
+# Table 2: best 모델의 클래스별 성능 (count·mIoU·AP20) → table_2.csv
 python Table/table_2.py
 
-# 논문용 Ablation Study 테이블 (table_4.csv) 생성
+# Table 3: best 모델의 클래스별 진단 분해 (precision/recall/count_ratio 등 6지표) → table_3.csv
+python Table/table_3.py
+
+# Table 4: best 모델의 단계별 향상 (first→residual→refinement→merge×1→merge×2) → table_4.csv
+#          정제·merge1·merge2는 total_performance.csv 재사용, first/residual만 새로 평가(수 분 소요)
 python Table/table_4.py
+
+# Table 5: 파라미터 ablation (stride·extend·turn, best 모델·merge×1 고정) → table_5.csv
+python Table/table_5.py
 
 # 2. 그림(Figures) 생성 스크립트 실행
 # 최적 예측 JSON 결과를 기반으로 validation 이미지에 개별 마스크 시각화 이미지 생성 (Figure_1)
@@ -110,7 +117,7 @@ python Figure/figure_compare.py
 ### 기타
 - `MODEL_PREFIX`: 모델 디렉토리 이름의 공통 접두사 (`"satellite_ade20k_250925_"`). `run_experiments.py`에서 CSV에 모델명 저장 시 이 접두사를 제거하는 데 사용
 
-새로운 설정 작성 시 `src/backup/config-template.py`를 참고한다.
+새로운 설정 작성 시 `src/config-template.py`를 참고한다.
 
 ---
 
@@ -129,12 +136,13 @@ LaneStitcher.detect_lines()
 coco_pred_instances_origin.json                  # 초기 벡터화 결과 (skeletonization 직후)
 coco_pred_instances_merge{1,2,3}.json            # 단계별 병합 결과 (merge3가 최종)
         ↓
-[Table 생성]
+[Table 생성]  (논문 Table 1~5, 공통 헬퍼 table_common.py)
 num_params.py → num_params.csv                   # 모델별 파라미터 수
-table_1.py    → table_1.csv                      # 알고리즘 변형별 성능 (AP, mIoU)
-table_2.py    → table_2.csv                      # 차선 클래스별 성능 (AP20, mIoU)
-              → table_3.csv                      # 차선 클래스별 심화 지표 (인스턴스 매칭 분석)
-table_4.py    → table_4.csv                      # Ablation study
+table_1.py    → table_1.csv                      # 모델 비교 (segmentation vs merge×1, 6줄)
+table_2.py    → table_2.csv                      # best 모델 클래스별 성능 (count·mIoU·AP20)
+table_3.py    → table_3.csv                      # best 모델 클래스별 진단 분해 (6지표)
+table_4.py    → table_4.csv                      # 단계별 향상 (first→residual→refinement→merge1→merge2)
+table_5.py    → table_5.csv                      # 파라미터 ablation (stride·extend·turn)
         ↓
 [Figure 생성]
 figure_1.py, figure_1_fin.py → Figure_1/, figure1.jpg  # 예측 마스크 개별/최종 비교 콜라주
@@ -189,7 +197,8 @@ DATA_ROOT/
     │    ├─ table_1.csv
     │    ├─ table_2.csv
     │    ├─ table_3.csv
-    │    └─ table_4.csv
+    │    ├─ table_4.csv
+    │    └─ table_5.csv
     └─ Figure/
          ├─ Figure_1/                     # figure_1.py 출력 (개별 시각화 마스크)
          ├─ Figure_2/                     # figure_2.py 출력 (2x2 콜라주 [이미지명].jpg)

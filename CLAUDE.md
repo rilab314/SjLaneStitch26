@@ -117,7 +117,7 @@ python Figure/figure_compare.py
 ### 기타
 - `MODEL_PREFIX`: 모델 디렉토리 이름의 공통 접두사 (`"satellite_ade20k_250925_"`). `run_experiments.py`에서 CSV에 모델명 저장 시 이 접두사를 제거하는 데 사용
 
-새로운 설정 작성 시 `src/backup/config-template.py`를 참고한다.
+새로운 설정 작성 시 `src/config-template.py`를 참고한다.
 
 ---
 

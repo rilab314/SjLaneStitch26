@@ -716,6 +716,47 @@ def count_class_instances(splits: List[str], csv_path: str):
     print(f'[count] 클래스별 개체수 csv 저장: {csv_path}')
 
 
+def count_before_after(splits: List[str]):
+    """merge 전(raw lane) vs 후(merged annotation) 개체수를 split별로 집계·출력한다.
+
+    BEFORE: SEED_LABEL_PATH 원본 라벨 json의 유효 lane 수(_load_lanes와 동일 기준:
+            RoadObject·LINE_STRING·점≥2·METAINFO 카테고리).
+    AFTER : merged_annotations_{split}.json의 annotation 수.
+    병합을 재실행하지 않고 파일만 읽어 계산한다."""
+    name2id = {c['name']: c['id'] for c in cfg.METAINFO}
+    with open(cfg.DATASET_SPLIT_JSON, 'r') as f:
+        dataset = json.load(f)
+
+    before = {sp: 0 for sp in splits}
+    after = {sp: 0 for sp in splits}
+    for sp in splits:
+        for base in dataset.get(sp, []):
+            json_file = os.path.join(cfg.SEED_LABEL_PATH, base + '.json')
+            if not os.path.exists(json_file):
+                continue
+            with open(json_file, 'r') as f:
+                data = json.load(f)
+            before[sp] += sum(
+                1 for o in data
+                if o.get('class') == 'RoadObject' and o.get('geometry_type') == 'LINE_STRING'
+                and o.get('image_points') is not None and len(o['image_points']) >= 2
+                and o.get('category') in name2id)
+        merged_path = _split_coco_path(sp)
+        if os.path.exists(merged_path):
+            with open(merged_path, 'r') as f:
+                after[sp] = len(json.load(f)['annotations'])
+
+    total_b, total_a = sum(before.values()), sum(after.values())
+    print(f"\n{'split':12}{'before':>10}{'after':>10}{'reduced':>10}{'reduce%':>9}")
+    for sp in splits:
+        b, a = before[sp], after[sp]
+        pct = (1 - a / b) * 100 if b else 0.0
+        print(f"{sp:12}{b:>10}{a:>10}{b - a:>10}{pct:>8.1f}%")
+    pct = (1 - total_a / total_b) * 100 if total_b else 0.0
+    print(f"{'TOTAL':12}{total_b:>10}{total_a:>10}{total_b - total_a:>10}{pct:>8.1f}%")
+    return before, after
+
+
 def main():
     with open(cfg.DATASET_SPLIT_JSON, 'r') as f:
         dataset = json.load(f)

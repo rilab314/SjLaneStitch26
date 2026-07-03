@@ -1,12 +1,12 @@
-"""Figure 7 — 원본 vs GT vs 분할 vs 최종 결과 비교 (헤드라인 정성, 1×4 가로 콜라주).
+"""Figure 7 — 원본 vs GT vs 분할 vs 최종 vs TP/FP/FN (헤드라인 정성, 1×5 가로 콜라주).
 
 패널: (a) 원본 | (b) 원본 + GT linestring(끝점 점) | (c) 원본 + 분할 마스크(불투명)
-      | (d) 원본 + 최종 벡터 linestring(끝점 점).
+      | (d) 원본 + 최종 벡터 linestring(끝점 점) | (e) 원본 + TP(녹)·FP(빨강)·FN(파랑) 매칭.
 프레임별 AP20·mIoU(객체가 존재하는 유효 클래스로만 계산)를 재고 아래 4그룹으로 나눠 폴더별 저장한다.
 파일명 {좌표}_{AP20}_{mIoU}.png (지표는 %×10 정수, 예 AP42.3/mIoU24.5 → _423_245).
 그룹은 나열 순서대로 우선 매칭한다(첫 매칭 그룹에 저장):
-  HAP_HIoU: AP20>60 AND mIoU>50 | HAP_LIoU: AP20 > mIoU+10
-  LAP_HIoU: AP20 < mIoU-10      | LAP_LIoU: AP20<30 AND mIoU<30
+  HAP_HIoU: AP20>60 AND mIoU>55 | HAP_LIoU: AP20 > mIoU+25
+  LAP_HIoU: AP20 < mIoU-3       | LAP_LIoU: AP20<30 AND mIoU<30
 """
 import os
 import sys
@@ -22,6 +22,7 @@ if _SRC not in sys.path:
 import config as cfg
 import figure_render as fr
 import figure_metrics as fm
+import figure_match as fmatch
 from figure_base import FigureGenerator
 from evaluator import to_label_index_image, json_to_label_image
 
@@ -56,11 +57,11 @@ class SegVsMergeFigure(FigureGenerator):
 
     def _group(self, ap, miou):
         """AP20·mIoU(%) 조합으로 4그룹 판정(나열 순서 우선 매칭, 해당 없으면 None)."""
-        if ap > 60 and miou > 50:
+        if ap > 60 and miou > 55:
             return "HAP_HIoU"
-        if ap > miou + 10:
+        if ap > miou + 25:
             return "HAP_LIoU"
-        if ap < miou - 10:
+        if ap < miou - 3:
             return "LAP_HIoU"
         if ap < 30 and miou < 30:
             return "LAP_LIoU"
@@ -84,12 +85,13 @@ class SegVsMergeFigure(FigureGenerator):
         return float(np.mean(ious)) if ious else None
 
     def compose(self, stage, final, image_id):
-        """원본 | GT | 분할(불투명) | 최종 벡터 네 패널을 검은 여백으로 가로 결합한다."""
+        """원본 | GT | 분할(불투명) | 최종 벡터 | TP/FP/FN 다섯 패널을 검은 여백으로 가로 결합한다."""
         image = stage["image"]
         gt = fr.draw_strands(image.copy(), self._gt_strands(stage, image_id), dots=True)
         seg = fr.overlay_segmentation(image, stage["pred_img"], cfg.EXCLUDE_IDS, alpha=1.0)
         pred = fr.draw_strands(image.copy(), final, dots=True)
-        return fr.concat_horizontal([image.copy(), gt, seg, pred])
+        tpfpfn = fmatch.tpfpfn_panel(self._detector, image, final, self.gt_annotations(image_id))
+        return fr.concat_horizontal([image.copy(), gt, seg, pred, tpfpfn])
 
     def _gt_strands(self, stage, image_id):
         """GT color 주석 이미지를 예측과 동일하게 벡터화해 GT linestring을 얻는다."""

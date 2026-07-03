@@ -85,12 +85,15 @@ class FigureGenerator:
         return self._gt_map.get(image_id, [])
 
     def final_merge(self, stage):
-        """best merge_count에 해당하는 병합 단계 linestring(없으면 마지막/정제 결과)."""
+        """best merge_count 병합 단계 linestring. 짧은선 제거(_filter_short) 적용 → 평가 출력과 정합.
+
+        stage_linestrings의 merges는 detect_lines 출력과 달리 짧은선 필터가 안 걸려 있어,
+        평가에선 빠지는 min_lane_len 미만 조각이 figure에 남는다. 여기서 동일하게 걸러준다."""
         merges = stage["merges"]
         if not merges:
             return stage["refined"]
         idx = min(self._config.merge_count, len(merges)) - 1
-        return merges[idx]
+        return self._detector._filter_short(merges[idx])
 
     def report(self, kept):
         """저장 결과 요약 출력."""

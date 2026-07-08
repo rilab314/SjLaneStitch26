@@ -20,9 +20,10 @@ IOUs=[0.10, 0.20, 0.50]
 
 
 def main():
-    coco_gt_json = cfg.COCO_MERGED_ANNO_PATH
-    label_path = os.path.join(cfg.DATASET_PATH, "annotations", "validation")
-    
+    split = 'validation'
+    coco_gt_json = cfg.coco_anno_path(split)
+    label_path = cfg.label_dir(split)
+
     from util import find_best_pred_json_path, find_model_path
     csv_path = os.path.join(cfg.RESULT_PATH, 'total_performance.csv')
     model_name, _, _ = find_best_pred_json_path(csv_path)
@@ -32,63 +33,110 @@ def main():
 
     model_path = find_model_path(model_name)
 
-    evaluate_all(coco_gt_json, label_path, model_path, cfg.RESULT_PATH)
+    evaluate_all(coco_gt_json, label_path, model_path, cfg.RESULT_PATH, split)
 
 
-def evaluate_all(coco_gt_json, label_path, model_path, result_path):
-    json_files = sorted(glob.glob(os.path.join(result_path, "coco_pred_*.json")))
+def evaluate_all(coco_gt_json, label_path, model_path, result_path, split='validation'):
+    # 같은 param 폴더에 val/test가 공존한다. 현재 split의 예측 JSON만 읽고,
+    # 지표 열에 (val)/(test) 접미사를 붙여 eval_result.csv에 병합한다.
+    label = cfg.split_label(split)
+    json_files = sorted(glob.glob(os.path.join(result_path, f"coco_pred_{label}_*.json")))
     results = []
     result = {"merge_count": None}
-    result.update(evaluate_segm_pred_miou(model_path, label_path))
+    result.update(_suffix(evaluate_segm_pred_miou(model_path, label_path, split), label))
     results.append(result)
 
     for json_file in json_files:
         merge_count = _filename_to_merge_count(json_file)
         result = {"merge_count": merge_count}
-        result.update(evaluate_coco_ap(coco_gt_json, json_file))
-        result.update(evaluate_miou_json(json_file, label_path))
+        result.update(_suffix(evaluate_coco_ap(coco_gt_json, json_file), label))
+        result.update(_suffix(evaluate_miou_json(json_file, label_path), label))
         results.append(result)
 
     df = pd.DataFrame(results)
     filename = os.path.join(result_path, "eval_result.csv")
+    df = _merge_split_eval(filename, df)
     df.to_csv(filename, index=False, encoding="utf-8")
-    print(f"\n{'Evaluation Results':^100}\n")
+    print(f"\n{'Evaluation Results [' + split + ']':^100}\n")
     print(df.to_string(index=False))
 
 
-def _filename_to_merge_count(json_file: str) -> int:
-    name = os.path.basename(json_file).replace(".json", "").replace("coco_pred_instances_", "")
-    if name == "origin":
+def _suffix(metrics: Dict[str, Any], label: str) -> Dict[str, Any]:
+    """지표 dict의 각 키에 (label) 접미사를 붙인다. 예: AP20 -> AP20(val)."""
+    return {f"{k}({label})": v for k, v in metrics.items()}
+
+
+def _order_eval_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """merge_count 다음에 지표 열을 split(val→test)·지표 순으로 정렬한다."""
+    metrics = ["instances", "AP10", "AP20", "AP50", "mIoU"]
+    ordered = ["merge_count"]
+    for lbl in ("val", "test"):
+        for m in metrics:
+            col = f"{m}({lbl})"
+            if col in df.columns and col not in ordered:
+                ordered.append(col)
+    ordered += [c for c in df.columns if c not in ordered]
+    return df[ordered]
+
+
+def _merge_split_eval(csv_path: str, new_df: pd.DataFrame) -> pd.DataFrame:
+    """기존 eval_result.csv(다른 split 열)와 merge_count 키로 병합해 val·test 열을 한 파일에 둔다."""
+    if not os.path.exists(csv_path):
+        return _order_eval_columns(new_df)
+    old = pd.read_csv(csv_path)
+    sentinel = -999  # merge_count의 NaN(순수 seg 행) 병합용 임시값
+
+    def norm(df):
+        df = df.copy()
+        df["merge_count"] = pd.to_numeric(df["merge_count"], errors="coerce").fillna(sentinel)
+        return df
+
+    old_n, new_n = norm(old), norm(new_df)
+    dup = [c for c in new_n.columns if c in old_n.columns and c != "merge_count"]
+    old_n = old_n.drop(columns=dup)  # 같은 split 재평가 시 새 값 우선
+    merged = pd.merge(old_n, new_n, on="merge_count", how="outer").sort_values("merge_count")
+    merged["merge_count"] = merged["merge_count"].replace(sentinel, pd.NA)
+    return _order_eval_columns(merged)
+
+
+def _filename_to_merge_count(json_file: str):
+    # coco_pred_{val|test}_{origin|merge1|merge2}.json 의 마지막 토큰이 단계.
+    stage = os.path.basename(json_file).replace(".json", "").split("_")[-1]
+    if stage == "origin":
         return 0
-    if name.startswith("merge"):
-        return int(name[5:])
-    return name  # fallback: 알 수 없는 형식은 이름 그대로 반환
+    if stage.startswith("merge"):
+        return int(stage[5:])
+    return stage  # fallback: 알 수 없는 형식은 그대로 반환
 
 
-def evaluate_segm_pred_miou(model_path: str, label_path: str) -> Dict[str, float]:
-    print(f"===== [evaluate_segm_pred_miou] model_path: {model_path}, label_path: {label_path}")
-    metrics = evaluate_segm_pred_metrics(model_path, label_path)
+def evaluate_segm_pred_miou(model_path: str, label_path: str, split: str = 'validation') -> Dict[str, float]:
+    print(f"===== [evaluate_segm_pred_miou] model_path: {model_path}, label_path: {label_path}, split: {split}")
+    metrics = evaluate_segm_pred_metrics(model_path, label_path, split)
     res = {"mIoU": metrics["mIoU"]}
     print(f"===== [evaluate_segm_pred_miou] res: {res}")
     return res
 
 
-def evaluate_segm_pred_metrics(model_path: str, label_path: str) -> Dict[str, Any]:
-    """순수 segmentation 예측의 mIoU와 클래스별 IoU를 계산한다 (metrics.json 캐시 사용)"""
-    metrics_json = os.path.join(model_path, "metrics.json")
+def evaluate_segm_pred_metrics(model_path: str, label_path: str, split: str = 'validation') -> Dict[str, Any]:
+    """순수 segmentation 예측의 mIoU와 클래스별 IoU를 계산한다 (split별 metrics 캐시 사용).
+
+    예측 마스크는 <model_path>/pred_val|pred_test 에서, GT 라벨은 label_path(split별)에서
+    읽는다. 캐시는 split별 metrics_{split}.json 에 저장한다."""
+    metrics_json = os.path.join(model_path, f"metrics_{split}.json")
     if os.path.exists(metrics_json):
         data = load_json(metrics_json)
         if "per_class_iou" in data:  # 클래스별 IoU가 없는 구버전 캐시는 재계산
             return data
 
+    pred_dir = cfg.pred_path(model_path, split)
     files = glob.glob(os.path.join(label_path, "*.png"))
     intersections = {cid: 0 for cid in cfg.EVAL_CLASS_IDS}
     unions = {cid: 0 for cid in cfg.EVAL_CLASS_IDS}
-    for file in tqdm(files, desc="Segm IoU"):
+    for file in tqdm(files, desc=f"Segm IoU[{split}]"):
         grtr_label = to_label_index_image(cv2.imread(file, cv2.IMREAD_UNCHANGED), True)
         if grtr_label is None:
             continue
-        pred_img = cv2.imread(os.path.join(model_path, "prediction", os.path.basename(file)))
+        pred_img = cv2.imread(os.path.join(pred_dir, os.path.basename(file)))
         pred_label = to_label_index_image(pred_img, False)
         for cid in cfg.EVAL_CLASS_IDS:
             intersections[cid] += int(np.sum((grtr_label == cid) & (pred_label == cid)))
@@ -127,7 +175,10 @@ def evaluate_coco_ap(gt_json: str, pred_json: str):
 
 
 def _get_selected_annotation(gt_json: str) -> str:
-    save_path = os.path.join(os.path.dirname(gt_json), "selected_annotation.json")
+    # GT 파일마다 별도 캐시(…_selected.json). val·test GT가 같은 폴더(RESULT_PATH)에
+    # 있으므로 고정 이름을 쓰면 split끼리 캐시가 충돌한다.
+    root, ext = os.path.splitext(gt_json)
+    save_path = f"{root}_selected{ext}"
     # 캐시가 원본(gt_json)보다 최신일 때만 재사용. 원본이 갱신되면 캐시를 무효화한다.
     if os.path.exists(save_path) and os.path.getmtime(save_path) >= os.path.getmtime(gt_json):
         return save_path

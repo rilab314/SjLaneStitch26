@@ -28,9 +28,26 @@ def tables_dir():
     return os.path.join(cfg.RESULT_PATH, "Tables")
 
 
+def with_val_aliases(df):
+    """total_performance/eval의 (val) 지표 열에 무접미사 별칭을 추가한다.
+    기존 표 스크립트가 df['AP20'] 등으로 validation 값을 그대로 읽게 하는 하위호환 shim.
+    (test 열은 df['AP20(test)']로 직접 접근)"""
+    for m in ("instances", "AP10", "AP20", "AP50", "mIoU"):
+        v = cfg.mcol(m, "validation")
+        if v in df.columns and m not in df.columns:
+            df[m] = df[v]
+    return df
+
+
+def load_total_performance():
+    """total_performance.csv를 읽어 (val) 별칭을 붙인 DataFrame을 반환한다."""
+    return with_val_aliases(pd.read_csv(total_csv_path()))
+
+
 def best_combo(df):
-    """AP20 최고 행의 model·하이퍼파라미터(dict)를 반환한다."""
-    best = df.sort_values("AP20", ascending=False, na_position="last").iloc[0]
+    """AP20(val) 최고 행의 model·하이퍼파라미터(dict)를 반환한다."""
+    ap = cfg.mcol("AP20", "validation") if cfg.mcol("AP20", "validation") in df.columns else "AP20"
+    best = df.sort_values(ap, ascending=False, na_position="last").iloc[0]
     return {
         "model_name": str(best["model_name"]),
         "thicknesses": int(best["thicknesses"]),
@@ -45,12 +62,12 @@ def param_dir_name(combo):
             f"extend={combo['extend_lens']},turn={combo['turn_penalties']}")
 
 
-def pred_json_path(combo, merge_count):
-    """best 조합·merge 단계에 해당하는 예측 JSON 경로."""
+def pred_json_path(combo, merge_count, split="validation"):
+    """best 조합·merge 단계에 해당하는 예측 JSON 경로 (기본 validation)."""
     model_dir = cfg.MODEL_PREFIX + combo["model_name"]
     name = "origin" if merge_count == 0 else f"merge{merge_count}"
     return os.path.join(cfg.RESULT_PATH, model_dir, param_dir_name(combo),
-                        f"coco_pred_instances_{name}.json")
+                        f"coco_pred_{cfg.split_label(split)}_{name}.json")
 
 
 def pct(value):

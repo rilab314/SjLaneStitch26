@@ -25,7 +25,7 @@ class Table4Builder:
     """단계별(첫추출/잔여/정제/병합1/병합2) AP20·mIoU·인스턴스 수를 5줄로 정리한다."""
 
     def __init__(self, total_csv_path, save_name):
-        self.df = pd.read_csv(total_csv_path)
+        self.df = tc.with_val_aliases(pd.read_csv(total_csv_path))
         self.save_name = save_name
         self.combo = tc.best_combo(self.df)
 
@@ -38,7 +38,18 @@ class Table4Builder:
             self._row("+ Merge ×1", self._csv_stage(1)),
             self._row("+ Merge ×2", self._csv_stage(2)),
         ]
+        baseline = self._baseline_row()
+        if baseline is not None:
+            rows.append(baseline)
         tc.save_csv(pd.DataFrame(rows), self.save_name)
+
+    def _baseline_row(self):
+        """OpenSatMap baseline 예측(run_baseline.py 산출물)이 있으면 참조 행으로 맨 아래 추가한다.
+        없으면 None을 반환해 건너뛴다(누적 ablation 5행과 무관한 외부 baseline 비교 행)."""
+        path = os.path.join(cfg.RESULT_PATH, "coco_pred_instances_baseline.json")
+        if not os.path.exists(path):
+            return None
+        return self._row("OpenSatMap baseline (watershed)", self._evaluate(path))
 
     def _row(self, stage, metrics):
         return {"Stage": stage, "Instances": int(metrics["instances"]),
@@ -91,7 +102,10 @@ class Table4Builder:
 
     def _evaluate(self, pred_json):
         ap = evaluate_coco_ap(cfg.COCO_MERGED_ANNO_PATH, pred_json)
-        miou = evaluate_miou_json(pred_json, cfg.LABEL_PATH)
+        # total_performance의 csv 단계 mIoU와 같은 기준(기존 ade20k validation 라벨)으로 맞춘다.
+        # (cfg.LABEL_PATH는 새 SEED 라벨을 가리키므로 단계 간 mIoU 기준이 섞이는 것을 방지)
+        label_dir = os.path.join(cfg.DATASET_PATH, "annotations", "validation")
+        miou = evaluate_miou_json(pred_json, label_dir)
         return {"instances": ap["instances"], "AP20": ap["AP20"], "mIoU": miou["mIoU"]}
 
 

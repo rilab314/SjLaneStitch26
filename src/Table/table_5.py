@@ -21,7 +21,7 @@ class Table5Builder:
     """최고 모델·merge×1에서 stride·extend·turn 조합별 성능을 정리한다."""
 
     def __init__(self, total_csv_path, save_name):
-        self.df = pd.read_csv(total_csv_path)
+        self.df = tc.with_val_aliases(pd.read_csv(total_csv_path))
         self.save_name = save_name
 
     def build(self):

@@ -256,7 +256,7 @@ class LaneStitcher:
     residual_pass = True     # 1차 추출 후 남은 seg 영역에서 한 번 더 추출 (이중선 반대쪽 복원)
     residual_remove_width = 7 # 잔여 추출 시 1차 선 자취를 지우는 두께(px)
 
-    def __init__(self, data_path: str, pred_path: str, result_path: str, thickness: int = 3, sample_stride: int = 10, extend_len: int = 20, visualize: bool = True, do_clean: bool = True):
+    def __init__(self, data_path: str, pred_path: str, result_path: str, thickness: int = 3, sample_stride: int = 10, extend_len: int = 20, visualize: bool = True, do_clean: bool = True, split: str = 'validation'):
         self.thickness = thickness
         self.sample_stride = sample_stride
         self.extend_len = extend_len
@@ -264,6 +264,7 @@ class LaneStitcher:
         self._data_path = data_path
         self._pred_path = pred_path
         self._result_path = result_path
+        self._split = split  # 처리할 split. 입력 이미지 목록·예측 폴더(pred_val/pred_test) 결정
         self._visualize = visualize  # False면 창 표시·시각화 콜라주 생략 (성능평가용 고속 모드)
         self._img_shape = (100, 100)
         self._palette = [info['color'][::-1] for info in cfg.METAINFO]
@@ -278,8 +279,15 @@ class LaneStitcher:
         print("make result path: ", self._result_path)
         os.makedirs(self._result_path, exist_ok=True)
 
+    def _split_image_files(self):
+        """현재 split(dataset.json 기준)에 해당하는 원본 위성 이미지 경로 목록."""
+        with open(cfg.DATASET_SPLIT_JSON, 'r') as f:
+            bases = json.load(f)[self._split]
+        files = [os.path.join(cfg.SRC_IMAGE_DIR, b + '.png') for b in sorted(bases)]
+        return [f for f in files if os.path.exists(f)]
+
     def detect_lines(self, image_ids=None, desc=None):
-        file_list = sorted(glob.glob(os.path.join(self._data_path, 'images', 'validation', '*.png')))
+        file_list = self._split_image_files()
         if image_ids is not None:  # 특정 이미지 부분집합만 처리 (실험/비교용)
             keep = set(image_ids)
             file_list = [f for f in file_list if os.path.basename(f)[:-4] in keep]
@@ -406,12 +414,14 @@ class LaneStitcher:
 
     def _read_image(self, img_file: str):
         image = cv2.imread(img_file)
-        # print('image file', img_file)
-        pred_file = img_file.replace(self._data_path, self._pred_path).replace('/images/validation/', '/prediction/')
+        # 예측 마스크: <model>/pred_val|pred_test/<basename>.png (split별 폴더)
+        base = os.path.basename(img_file)
+        pred_file = os.path.join(cfg.pred_path(self._pred_path, self._split), base)
         pred_img = cv2.imread(pred_file)
         anno_img = None
         if self._visualize:
-            anno_file = img_file.replace('/images/', '/color_annotations/')
+            # 색상 GT 오버레이(시각화 전용). test split에는 없을 수 있어 None을 허용한다.
+            anno_file = os.path.join(cfg.DATASET_PATH, 'color_annotations', self._split, base)
             anno_img = cv2.imread(anno_file)
         # images = {'image': image, 'GT_img': anno_img, 'pred_img': pred_img}
         # self._imshow_base.show_imgs(images)
@@ -746,9 +756,12 @@ class LaneStitcher:
         return label_ids
 
     def _save_result_jsons(self, result_jsons: list):
+        # 파일명에 split 라벨을 넣어 같은 param 폴더에서 val/test를 구분한다
+        # (coco_pred_val_origin.json, coco_pred_test_merge1.json 등).
+        label = cfg.split_label(self._split)
         names = ['origin'] + [f'merge{n}' for n in range(1, self.num_merges + 1)]
         for name, data in zip(names, result_jsons):
-            path = os.path.join(self._result_path, f'coco_pred_instances_{name}.json')
+            path = os.path.join(self._result_path, f'coco_pred_{label}_{name}.json')
             with open(path, 'w') as f:
                 json.dump(data, f)
         counts = ', '.join(f'{name}={len(data)}' for name, data in zip(names, result_jsons))

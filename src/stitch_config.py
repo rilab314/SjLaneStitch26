@@ -42,19 +42,20 @@ def load_stitch_config(prefer_model=DEFAULT_MODEL):
 
 
 def build_config_from_csv(csv_path):
-    """CSV에서 AP20 최고 행을 골라 StitchConfig를 만든다."""
+    """CSV에서 AP20(val) 최고 행을 골라 StitchConfig를 만든다."""
     frame = pd.read_csv(csv_path)
-    best = frame.sort_values("AP20", ascending=False, na_position="last").iloc[0]
+    ap = cfg.mcol("AP20", "validation") if cfg.mcol("AP20", "validation") in frame.columns else "AP20"
+    best = frame.sort_values(ap, ascending=False, na_position="last").iloc[0]
     model_name = str(best["model_name"])
     model_path = resolve_model_path(model_name)
     print(f"[config] best: {model_name} thick={int(best['thicknesses'])} "
           f"stride={int(best['sample_strides'])} extend={int(best['extend_lens'])} "
           f"turn={float(best['turn_penalties'])} merge={int(best['merge_count'])} "
-          f"AP20={float(best['AP20']):.4f}")
+          f"{ap}={float(best[ap]):.4f}")
     return StitchConfig(
         model_name=model_name,
         model_path=model_path,
-        pred_dir=os.path.join(model_path, "prediction"),
+        pred_dir=cfg.pred_path(model_path, "validation"),
         thickness=int(best["thicknesses"]),
         sample_stride=int(best["sample_strides"]),
         extend_len=int(best["extend_lens"]),

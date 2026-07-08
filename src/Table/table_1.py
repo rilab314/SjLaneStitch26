@@ -1,8 +1,10 @@
-"""Table 1 — 모델 비교 (segmentation vs merge×1), 6줄.
+"""Table 1 — 모델 비교 (segmentation vs merge×1), val·test 병기.
 
-열: Model | Params(M) | Stage | Instances | AP20 | mIoU
+열: Model | Params(M) | Stage | Instances(val) | AP20(val) | mIoU(val)
+                                | Instances(test) | AP20(test) | mIoU(test)
 각 모델마다 Segmentation 행(인스턴스·AP20 공란, mIoU만)과 Merge×1 행을 출력한다.
-출처: total_performance.csv(best 파라미터 고정) + num_params.csv.
+출처: total_performance.csv(best 파라미터 고정, val·test 열) + num_params.csv.
+test 열이 아직 없으면(=validation만 실행) 해당 값은 공란으로 표기한다.
 """
 import os
 import sys
@@ -15,10 +17,10 @@ import table_common as tc
 
 
 class Table1Builder:
-    """3모델의 segmentation mIoU와 merge×1 성능을 6줄로 정리한다."""
+    """3모델의 segmentation mIoU와 merge×1 성능을 val·test 병기로 정리한다."""
 
     def __init__(self, total_csv_path, num_params_path, save_name):
-        self.df = pd.read_csv(total_csv_path)
+        self.df = tc.with_val_aliases(pd.read_csv(total_csv_path))
         self.params_map = pd.read_csv(num_params_path).set_index("model")["total_params_M"]
         self.save_name = save_name
 
@@ -42,19 +44,40 @@ class Table1Builder:
         return self.df[mask]
 
     def _segmentation_row(self, model, sub):
+        # 순수 세그멘테이션은 mIoU만(인스턴스·AP는 공란)
         seg = sub[sub["merge_count"].isna()].iloc[0]
-        return self._row(model, "Segmentation", tc.BLANK, tc.BLANK, seg["mIoU"])
+        return self._row(model, "Segmentation",
+                         {sp: {"instances": None, "AP20": None,
+                               "mIoU": seg.get(cfg.mcol("mIoU", sp))}
+                          for sp in cfg.EVAL_SPLITS})
 
     def _merge_row(self, model, sub):
         m1 = sub[sub["merge_count"] == tc.MERGE_COUNT].iloc[0]
         return self._row(model, f"Merge×{tc.MERGE_COUNT}",
-                         int(m1["instances"]), tc.pct(m1["AP20"]), m1["mIoU"])
+                         {sp: {"instances": m1.get(cfg.mcol("instances", sp)),
+                               "AP20": m1.get(cfg.mcol("AP20", sp)),
+                               "mIoU": m1.get(cfg.mcol("mIoU", sp))}
+                          for sp in cfg.EVAL_SPLITS})
 
-    def _row(self, model, stage, instances, ap20, miou):
-        return {"Model": tc.MODEL_DISPLAY.get(model, model),
-                "Params(M)": self.params_map.get(model),
-                "Stage": stage, "Instances": instances,
-                "AP20": ap20, "mIoU": tc.pct(miou)}
+    def _row(self, model, stage, per_split):
+        row = {"Model": tc.MODEL_DISPLAY.get(model, model),
+               "Params(M)": self.params_map.get(model),
+               "Stage": stage}
+        for sp in cfg.EVAL_SPLITS:
+            lbl = cfg.split_label(sp)
+            v = per_split[sp]
+            row[f"Instances({lbl})"] = _int_or_blank(v["instances"])
+            row[f"AP20({lbl})"] = _pct_or_blank(v["AP20"])
+            row[f"mIoU({lbl})"] = _pct_or_blank(v["mIoU"])
+        return row
+
+
+def _pct_or_blank(value):
+    return tc.BLANK if value is None or pd.isna(value) else tc.pct(value)
+
+
+def _int_or_blank(value):
+    return tc.BLANK if value is None or pd.isna(value) else int(value)
 
 
 def main():

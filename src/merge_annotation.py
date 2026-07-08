@@ -673,9 +673,8 @@ class MergeAnnotator:
 
 
 def _split_coco_path(split: str) -> str:
-    """split 별 merged_annotations_{split}.json 경로를 만든다."""
-    root, ext = os.path.splitext(cfg.MERGED_COCO_PATH)
-    return f'{root}_{split}{ext}'
+    """split 별 merged_annotations_{split}.json 경로 (결과 폴더 RESULT_PATH 내)."""
+    return cfg.coco_anno_path(split)
 
 
 def count_class_instances(splits: List[str], csv_path: str):
@@ -761,21 +760,22 @@ def main():
     with open(cfg.DATASET_SPLIT_JSON, 'r') as f:
         dataset = json.load(f)
 
-    # validation을 먼저 처리한 뒤 train을 처리한다.
-    splits = ['validation', 'train']
+    # 평가 대상 split(기본: validation, test)에 대해 COCO GT를 결과 폴더에 생성한다.
+    # 이미지·SEED 라벨은 split이 혼재된 원본 폴더(SRC_*)에서 basename으로 찾는다.
+    splits = cfg.EVAL_SPLITS
     for split in splits:
         annotator = MergeAnnotator(
             split=split,
             image_ids=sorted(dataset[split]),
             label_path=cfg.SEED_LABEL_PATH,
-            image_path=os.path.join(cfg.COCO_ROOT, cfg.SPLIT_IMAGE_DIR[split]),
-            compare_path=os.path.join(cfg.MERGE_COMPARE_PATH, split),
+            image_path=cfg.SRC_IMAGE_DIR,
+            compare_path=cfg.merge_compare_dir(split),
             coco_path=_split_coco_path(split),
         )
         annotator.run()
 
     # 두 작업이 끝난 뒤 별도 함수로 클래스별 개체수를 계산해 csv로 저장한다.
-    csv_path = os.path.join(os.path.dirname(cfg.MERGED_COCO_PATH), 'class_counts.csv')
+    csv_path = os.path.join(cfg.RESULT_PATH, 'class_counts.csv')
     count_class_instances(splits, csv_path)
 
 

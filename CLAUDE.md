@@ -22,70 +22,55 @@
 - **lane**: 의미 차선 객체(center_line 등 클래스) — 도메인 관점
 - **polyline / `Strand`**: 그 차선의 기하 표현(순서 있는 점열) — 자료구조 관점.
   세그멘테이션에서 추출돼 stitch될 "가닥". `LaneStitcher`가 다루는 단위.
-- **`LaneStitcher`**: 세그멘테이션 → lane 벡터화·병합 파이프라인 클래스 (`lane_stitcher.py`)
-- **`MergeAnnotator`**: GT 어노테이션 통합 파이프라인 (`merge_annotation.py`)
-- 공유 기하/병합 연산은 `polyline_merge.py`에 모음
+- **`LaneStitcher`**: 세그멘테이션 → lane 벡터화·병합 파이프라인 클래스 (`core/lane_stitcher.py`)
+- **`MergeAnnotator`**: GT 어노테이션 통합 파이프라인 (`dataprep/merge_annotation.py`)
+- 공유 기하/병합 연산은 각 파이프라인 파일(`core/lane_stitcher.py`, `dataprep/merge_annotation.py`) 안에 포함되어 있다
 
 ---
 
 ## 실행 방법
 
-모든 스크립트는 `src/` 디렉토리에서 실행해야 한다 (모듈 임포트가 상대 경로 기준):
+`src/`는 종류별 하위 폴더로 정리되어 있다. 직접 실행하는 스크립트 목록·순서의 상세는
+`src/README.md`(영문)를 참고한다. 모든 명령은 `src/`에서 실행한다.
+
+폴더 구조 요약:
+- `core/` — 공유 라이브러리(직접 실행 X): `lane_stitcher.py`, `evaluator.py`,
+  `baseline_opensatmap.py`, `stitch_config.py`, `util.py`, `show_imgs.py`
+  (`evaluator.py`·`lane_stitcher.py`의 `main()`은 실제 실행용이 아니라 동작 확인용 스모크 테스트다)
+- `inference/` — 세그멘테이션 추론 → 모델별 `pred_val`/`pred_test`
+- `dataprep/` — GT 생성 (`merge_annotation.py`=COCO GT, `make_seg_labels.py`=라벨 PNG)
+- `experiment/` — 파이프라인 실행·평가 (`run_experiments.py`, `run_best_experiment.py`, `run_baseline.py`)
+- `tables/` — 논문 Table 1~5 (`table_1.py`~`table_5.py`, `num_params.py`, 공통 헬퍼 `table_common.py`)
+- `figures/` — 논문 Figure 1~8 (`figure_1.py`~`figure_8.py`, 공통 렌더 헬퍼 `figure_*.py`)
+- `import` 경로는 `_bootstrap.py`가 `core/`·`tables/`·`figures/`를 sys.path에 등록해 유지된다.
 
 ```bash
 cd src
 
-# 단일 모델 설정으로 차선 추출(stitch) 실행
-python lane_stitcher.py
+# 1. 세그멘테이션 추론 → <model>/pred_val, <model>/pred_test
+python inference/infer_internimage.py
+python inference/infer_mask2former.py
 
-# 모든 모델과 파라미터 조합으로 전체 하이퍼파라미터 탐색 실행
-python run_experiments.py
+# 2. GT 생성 (둘 다 동일 SEED 벡터 라벨에서 파생)
+python dataprep/merge_annotation.py      # COCO GT: merged_annotations_{val,test}.json (AP용)
+python dataprep/make_seg_labels.py       # 인덱스 라벨 PNG: labels/{val,test}/ (mIoU용)
 
-# 창 표시·시각화 콜라주 생략하고 성능평가만 빠르게 실행 (고속 모드)
-python run_experiments.py --fast
+# 3. 파이프라인 실행·평가 (validation에서 파라미터 탐색 후 test에 best 적용)
+python experiment/run_experiments.py --split validation test
+python experiment/run_experiments.py --fast          # 창·콜라주 생략 고속 평가
+python experiment/run_best_experiment.py             # best 조합 단일 실행
+python experiment/run_baseline.py                    # OpenSatMap watershed baseline 비교
 
-# 1. 테이블(Tables) 생성 스크립트 실행 — 논문 Table 1~5에 1:1 대응, 공통 헬퍼는 Table/table_common.py
-# 체크포인트를 로드하여 모델별 파라미터 개수를 계산하고 num_params.csv 생성 (Table 1의 Params 열 전제)
-python Table/num_params.py
+# 4. 테이블 (→ RESULT_PATH/Tables/*.csv)
+python tables/num_params.py              # 모델별 파라미터 수 (Table 1 Params 열)
+python tables/table_1.py                 # 모델 비교 (segmentation vs merge×1), val·test
+python tables/table_2.py                 # best 모델 클래스별 성능
+python tables/table_3.py                 # best 모델 클래스별 진단 분해
+python tables/table_4.py                 # 단계별 향상 (+ baseline 행이 있으면 포함)
+python tables/table_5.py                 # 파라미터 ablation (stride·extend·turn)
 
-# Table 1: 모델 비교 (segmentation vs merge×1), 6줄 → table_1.csv
-python Table/table_1.py
-
-# Table 2: best 모델의 클래스별 성능 (count·mIoU·AP20) → table_2.csv
-python Table/table_2.py
-
-# Table 3: best 모델의 클래스별 진단 분해 (precision/recall/count_ratio 등 6지표) → table_3.csv
-python Table/table_3.py
-
-# Table 4: best 모델의 단계별 향상 (first→residual→refinement→merge×1→merge×2) → table_4.csv
-#          정제·merge1·merge2는 total_performance.csv 재사용, first/residual만 새로 평가(수 분 소요)
-python Table/table_4.py
-
-# Table 5: 파라미터 ablation (stride·extend·turn, best 모델·merge×1 고정) → table_5.csv
-python Table/table_5.py
-
-# 2. 그림(Figures) 생성 스크립트 실행
-# 최적 예측 JSON 결과를 기반으로 validation 이미지에 개별 마스크 시각화 이미지 생성 (Figure_1)
-python Figure/figure_1.py
-
-# 원본 위성 이미지와 Figure_1 마스크 시각화를 1x2 쌍으로 결합한 최종 콜라주(figure1.jpg) 생성
-python Figure/figure_1_fin.py
-
-# 원본+GT overlay, Segmentation 예측, 초기 폴리라인, 최종 병합 폴리라인을 담은 2x2 콜라주 생성 (Figure_2)
-python Figure/figure_2.py
-
-# Guiding line(8)과 Safety zone(10)에 대해 GT와 예측 결과를 비교한 콜라주 생성 (Figure_3)
-python Figure/figure_3.py
-
-# center_line(1)의 병합 알고리즘 중간 단계를 시각화하는 1x4 콜라주 생성 (Figure_4)
-python Figure/figure_4.py
-
-# 원본 이미지, 원본+GT overlay, 원본+Prediction (merge2) overlay를 담은 1x3 콜라주 생성 (Figure_5)
-python Figure/figure_5.py
-
-# 원본+GT overlay와 세 모델(internimage_large, mask2former_large, mask2former_small)의
-# segmentation overlay를 비교하는 2x2 콜라주 생성 (Figure_compare, 20px 흰색 구분선)
-python Figure/figure_compare.py
+# 5. 그림 (→ RESULT_PATH/Figure/*)
+python figures/figure_1.py               # ... figure_8.py 까지
 ```
 
 ---
@@ -136,21 +121,16 @@ LaneStitcher.detect_lines()
 coco_pred_instances_origin.json                  # 초기 벡터화 결과 (skeletonization 직후)
 coco_pred_instances_merge{1,2,3}.json            # 단계별 병합 결과 (merge3가 최종)
         ↓
-[Table 생성]  (논문 Table 1~5, 공통 헬퍼 table_common.py)
-num_params.py → num_params.csv                   # 모델별 파라미터 수
-table_1.py    → table_1.csv                      # 모델 비교 (segmentation vs merge×1, 6줄)
-table_2.py    → table_2.csv                      # best 모델 클래스별 성능 (count·mIoU·AP20)
-table_3.py    → table_3.csv                      # best 모델 클래스별 진단 분해 (6지표)
-table_4.py    → table_4.csv                      # 단계별 향상 (first→residual→refinement→merge1→merge2)
-table_5.py    → table_5.csv                      # 파라미터 ablation (stride·extend·turn)
+[Table 생성]  (논문 Table 1~5, 공통 헬퍼 tables/table_common.py)
+tables/num_params.py → num_params.csv             # 모델별 파라미터 수
+tables/table_1.py    → table_1.csv                # 모델 비교 (segmentation vs merge×1), val·test
+tables/table_2.py    → table_2.csv                # best 모델 클래스별 성능 (count·mIoU·AP20)
+tables/table_3.py    → table_3.csv                # best 모델 클래스별 진단 분해 (6지표)
+tables/table_4.py    → table_4.csv                # 단계별 향상 (first→residual→refinement→merge1→merge2)
+tables/table_5.py    → table_5.csv                # 파라미터 ablation (stride·extend·turn)
         ↓
 [Figure 생성]
-figure_1.py, figure_1_fin.py → Figure_1/, figure1.jpg  # 예측 마스크 개별/최종 비교 콜라주
-figure_2.py                  → Figure_2/*.jpg          # 2x2 비교 콜라주 (원본/예측/초기선/최종선)
-figure_3.py                  → Figure_3/*.png          # Guiding line & Safety zone 비교 콜라주
-figure_4.py                  → Figure_4/*.png          # center_line 병합 중간과정 1x4 콜라주
-figure_5.py                  → Figure_5/*.png          # 1x3 원본/GT/Prediction 비교 콜라주
-figure_compare.py            → Figure_compare/*.png    # 2x2 GT/모델 3종 segmentation overlay 콜라주
+figures/figure_1.py ~ figures/figure_8.py → RESULT_PATH/Figure/*   # 논문 Figure 1~8 콜라주
 ```
 
 ## 런타임 디렉토리 구조

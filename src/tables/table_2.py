@@ -1,6 +1,6 @@
 """Table 2 — per-class performance of the best model, 9 rows.
 
-Columns: class_name | gt_count | pred_count | mIoU | AP20
+Columns: class_name | gt_count | pred_count | AP20 | mIoU
 Source: best combo, merge×1 prediction JSON (table_common). Based on the best model (Mask2Former Swin-L).
 """
 import os
@@ -38,8 +38,8 @@ class Table2Builder:
         rows = [{"class_name": cfg.ID2NAME.get(cid, str(cid)),
                  "gt_count": gt_counts.get(cid, 0),
                  "pred_count": pred_counts.get(cid, 0),
-                 "mIoU": tc.pct(miou.get(cid, 0.0)),
-                 "AP20": tc.pct(ap20.get(cid, 0.0))}
+                 "AP20": tc.pct(ap20.get(cid, 0.0)),
+                 "mIoU": tc.pct(miou.get(cid, 0.0))}
                 for cid in cfg.EVAL_CLASS_IDS]
         tc.save_csv(pd.DataFrame(rows), self.save_name)
 

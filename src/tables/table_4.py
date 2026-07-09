@@ -39,18 +39,7 @@ class Table4Builder:
             self._row("+ Merge ×1", self._csv_stage(1)),
             self._row("+ Merge ×2", self._csv_stage(2)),
         ]
-        baseline = self._baseline_row()
-        if baseline is not None:
-            rows.append(baseline)
         tc.save_csv(pd.DataFrame(rows), self.save_name)
-
-    def _baseline_row(self):
-        """If an OpenSatMap baseline prediction (output of run_baseline.py) exists, append it as a reference row at the bottom.
-        Otherwise return None to skip it (an external baseline comparison row unrelated to the 5 cumulative ablation rows)."""
-        path = os.path.join(cfg.RESULT_PATH, "coco_pred_instances_baseline.json")
-        if not os.path.exists(path):
-            return None
-        return self._row("OpenSatMap baseline (watershed)", self._evaluate(path))
 
     def _row(self, stage, metrics):
         return {"Stage": stage, "Instances": int(metrics["instances"]),

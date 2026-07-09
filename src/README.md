@@ -20,7 +20,6 @@ src/
   core/                # shared libraries (imported, not run directly)
     lane_stitcher.py       # LaneStitcher: segmentation -> polyline vectorization & merge
     evaluator.py           # COCO AP + mIoU evaluation
-    baseline_opensatmap.py # OpenSatMap watershed baseline (reference comparison)
     stitch_config.py       # best-config loader from total_performance.csv
     util.py  show_imgs.py
 
@@ -36,7 +35,6 @@ src/
     run_experiments.py     # hyper-parameter sweep (val) + fixed-param eval (test)
     run_parallel_sweep.py  # same sweep, fanned out across processes (deterministic, much faster)
     run_best_experiment.py # single run with the best config
-    run_baseline.py        # OpenSatMap baseline on the best model's predictions
 
   tables/              # paper tables (Table 1..5) + shared helper
     num_params.py table_1.py .. table_5.py  table_common.py (lib)
@@ -120,7 +118,6 @@ MAXJOBS=14 python experiment/run_parallel_sweep.py
 python experiment/run_experiments.py --fast        # skip windows/collages
 python experiment/run_experiments.py --eval-only    # re-evaluate existing predictions (GT changed)
 python experiment/run_best_experiment.py            # single run with the best config
-python experiment/run_baseline.py                   # OpenSatMap watershed baseline (comparison)
 ```
 
 Both drivers write `total_performance.csv` (and per-combo `eval_result.csv`) into
@@ -135,7 +132,7 @@ python tables/num_params.py    # model parameter counts (Table 1 Params column)
 python tables/table_1.py       # model comparison (segmentation vs merge x1), val/test
 python tables/table_2.py       # best model, per-class performance
 python tables/table_3.py       # best model, per-class diagnostic breakdown
-python tables/table_4.py       # stage-wise gains (+ OpenSatMap baseline row if present)
+python tables/table_4.py       # stage-wise gains (first->residual->refinement->merge1->merge2)
 python tables/table_5.py       # parameter ablation (stride/extend/turn)
 ```
 

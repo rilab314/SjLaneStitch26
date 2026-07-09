@@ -253,6 +253,20 @@ def parse_single_csv(file_path):
     return df
 
 
+def run_one_combo(model_token, t, s, e, tp, split):
+    """Run detection+eval for a single (model, params, split) combo. Used by the parallel driver
+    (run_parallel_sweep.py) which fans these out as independent subprocesses."""
+    import cv2
+    cv2.setNumThreads(1)  # keep each parallel combo single-threaded (avoid oversubscription)
+    model_paths = find_model_paths(cfg.DATA_ROOT)
+    mp = next((p for p in model_paths
+               if os.path.basename(p) in (model_token, cfg.MODEL_PREFIX + model_token)
+               or os.path.basename(p).replace(cfg.MODEL_PREFIX, '') == model_token), None)
+    if mp is None:
+        raise SystemExit(f"[run-combo] model not found: {model_token}")
+    run_single_experiment(mp, os.path.basename(mp), t, s, e, tp, split, visualize=False)
+
+
 def main():
     parser = argparse.ArgumentParser(description='Run hyperparameter search and performance evaluation')
     parser.add_argument('--fast', action='store_true',
@@ -263,7 +277,13 @@ def main():
                         default=list(cfg.EVAL_SPLITS),
                         help='Select splits to evaluate (default: both validation and test). '
                              'e.g. --split test (test only), --split validation test (both)')
+    parser.add_argument('--run-combo', nargs=6, metavar=('MODEL', 'THICK', 'STRIDE', 'EXTEND', 'TURN', 'SPLIT'),
+                        help='Run one (model, params, split) combo only, no aggregation (for the parallel driver).')
     args = parser.parse_args()
+    if args.run_combo:
+        model, t, s, e, tp, split = args.run_combo
+        run_one_combo(model, int(t), int(s), int(e), int(tp), split)
+        return
     splits = args.split
     if args.eval_only:
         eval_only(splits)

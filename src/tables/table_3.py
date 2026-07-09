@@ -1,7 +1,7 @@
 """Table 3 — per-class diagnostic breakdown of the best model, 9 rows.
 
-Columns: class_name | precision | recall | count_ratio | near_miss_gt | merge_ratio | miou_match
-All based on IoU 0.2 matching. count_ratio<1=under-detection, merge_ratio>1=merging, near_miss_gt=0<IoU<0.2,
+Columns: class_name | precision | recall | near_miss_gt | merge_ratio | miou_match
+All based on IoU 0.2 matching. merge_ratio>1=merging, near_miss_gt=0<IoU<0.2,
 miou_match=average IoU of matched pairs. (Non-manuscript columns such as ap20_check/near_miss_pix/frag_ratio/fp_* are excluded)
 Source: best combo, merge×1 prediction JSON.
 """
@@ -98,7 +98,6 @@ class Table3Builder:
         nP, nG, M = a["n_pred"], a["n_gt"], a["matched"]
         return {"precision": tc.pct(M / nP if nP else 0.0),
                 "recall": tc.pct(M / nG if nG else 0.0),
-                "count_ratio": round(nP / nG if nG else 0.0, 3),
                 "near_miss_gt": tc.pct(a["near_miss"] / nG if nG else 0.0),
                 "merge_ratio": round(a["merge_sum"] / nP if nP else 0.0, 3),
                 "miou_match": tc.pct(a["matched_iou"] / M if M else 0.0)}

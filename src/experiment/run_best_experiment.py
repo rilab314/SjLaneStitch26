@@ -33,12 +33,12 @@ def main():
     config = resolve_best_config()
     model_path = resolve_model_path(config.model_name)
     model_name = os.path.basename(model_path)
-    label_path = os.path.join(cfg.DATASET_PATH, "annotations", "validation")
+    # GT (coco AP + mIoU labels) is resolved inside run_single_experiment via cfg per split.
     run_single_experiment(
         model_path, model_name,
         config.thickness, config.sample_stride, config.extend_len,
         int(round(config.turn_penalty)),
-        cfg.COCO_MERGED_ANNO_PATH, label_path,
+        'validation',
         visualize=False, run_idx=1, total_runs=1)
 
 

@@ -39,18 +39,7 @@ class Table4Builder:
             self._row("+ Merge ×1", self._csv_stage(1)),
             self._row("+ Merge ×2", self._csv_stage(2)),
         ]
-        baseline = self._baseline_row()
-        if baseline is not None:
-            rows.append(baseline)
         tc.save_csv(pd.DataFrame(rows), self.save_name)
-
-    def _baseline_row(self):
-        """If an OpenSatMap baseline prediction (output of run_baseline.py) exists, append it as a reference row at the bottom.
-        Otherwise return None to skip it (an external baseline comparison row unrelated to the 5 cumulative ablation rows)."""
-        path = os.path.join(cfg.RESULT_PATH, "coco_pred_instances_baseline.json")
-        if not os.path.exists(path):
-            return None
-        return self._row("OpenSatMap baseline (watershed)", self._evaluate(path))
 
     def _row(self, stage, metrics):
         return {"Stage": stage, "Instances": int(metrics["instances"]),
@@ -76,7 +65,7 @@ class Table4Builder:
 
     def _build_stage_predictions(self):
         det = self._build_detector()
-        files = sorted(glob.glob(os.path.join(cfg.DATASET_PATH, "images", "validation", "*.png")))
+        files = sorted(glob.glob(os.path.join(cfg.image_dir("validation"), "*.png")))
         first_preds, combined_preds = [], []
         for f in tqdm(files, desc="first/residual stage extraction"):
             image_id = os.path.basename(f)[:-4]
@@ -103,10 +92,8 @@ class Table4Builder:
 
     def _evaluate(self, pred_json):
         ap = evaluate_coco_ap(cfg.COCO_MERGED_ANNO_PATH, pred_json)
-        # Align with the same basis as the csv-stage mIoU in total_performance (the existing ade20k validation labels).
-        # (cfg.LABEL_PATH points to the new SEED labels, so this prevents mixing mIoU bases across stages)
-        label_dir = os.path.join(cfg.DATASET_PATH, "annotations", "validation")
-        miou = evaluate_miou_json(pred_json, label_dir)
+        # Same mIoU label basis as the total_performance sweep (both read ade20k/annotations/validation).
+        miou = evaluate_miou_json(pred_json, cfg.label_dir("validation"))
         return {"instances": ap["instances"], "AP20": ap["AP20"], "mIoU": miou["mIoU"]}
 
 

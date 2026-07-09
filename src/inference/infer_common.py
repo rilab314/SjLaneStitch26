@@ -3,7 +3,7 @@ Common utilities for segmentation inference (infer_common)
 
 Parts shared by the InternImage (env: internimage, mmseg 0.x) and Mask2Former (env: mmseg, mmseg 1.x)
 inference scripts:
-  - per-split list of original images (dataset.json + SRC_IMAGE_DIR)
+  - per-split list of original images (dataset.json split lists + built ade20k images)
   - model class index map -> pure class-color mask (BGR) conversion (lane_stitcher input format)
   - iterate over splits and save to <model>/pred_val, <model>/pred_test
   - validate the color mapping against the existing prediction/ folder (the original val inference results)
@@ -59,7 +59,7 @@ def run_inference(infer_fn, model_out_dir, splits=None, class_offset=0, overwrit
             if os.path.exists(dst) and not overwrite:
                 skipped += 1
                 continue
-            img_path = os.path.join(cfg.SRC_IMAGE_DIR, b + '.png')
+            img_path = os.path.join(cfg.image_dir(split), b + '.png')
             if not os.path.exists(img_path):
                 missing += 1
                 continue
@@ -84,7 +84,7 @@ def validate_against_existing(infer_fn, model_out_dir, class_offset=0, split='va
     cnt = 0
     for b in bases:
         ref_path = os.path.join(existing_dir, b + '.png')
-        img_path = os.path.join(cfg.SRC_IMAGE_DIR, b + '.png')
+        img_path = os.path.join(cfg.image_dir(split), b + '.png')
         if not (os.path.exists(ref_path) and os.path.exists(img_path)):
             continue
         ref = cv2.imread(ref_path)

@@ -76,7 +76,7 @@ class Table4Builder:
 
     def _build_stage_predictions(self):
         det = self._build_detector()
-        files = sorted(glob.glob(os.path.join(cfg.DATASET_PATH, "images", "validation", "*.png")))
+        files = sorted(glob.glob(os.path.join(cfg.image_dir("validation"), "*.png")))
         first_preds, combined_preds = [], []
         for f in tqdm(files, desc="first/residual stage extraction"):
             image_id = os.path.basename(f)[:-4]
@@ -103,10 +103,8 @@ class Table4Builder:
 
     def _evaluate(self, pred_json):
         ap = evaluate_coco_ap(cfg.COCO_MERGED_ANNO_PATH, pred_json)
-        # Align with the same basis as the csv-stage mIoU in total_performance (the existing ade20k validation labels).
-        # (cfg.LABEL_PATH points to the new SEED labels, so this prevents mixing mIoU bases across stages)
-        label_dir = os.path.join(cfg.DATASET_PATH, "annotations", "validation")
-        miou = evaluate_miou_json(pred_json, label_dir)
+        # Same mIoU label basis as the total_performance sweep (both read ade20k/annotations/validation).
+        miou = evaluate_miou_json(pred_json, cfg.label_dir("validation"))
         return {"instances": ap["instances"], "AP20": ap["AP20"], "mIoU": miou["mIoU"]}
 
 

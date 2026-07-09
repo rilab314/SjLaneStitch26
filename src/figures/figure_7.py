@@ -33,7 +33,7 @@ class SegVsMergeFigure(FigureGenerator):
 
     def __init__(self):
         super().__init__()
-        self.label_dir = os.path.join(cfg.DATASET_PATH, "annotations", "validation")
+        self.label_dir = cfg.label_dir("validation")
 
     def save_if_match(self, path):
         image_id = os.path.basename(path)[:-4]
@@ -94,7 +94,7 @@ class SegVsMergeFigure(FigureGenerator):
 
     def _gt_strands(self, stage, image_id):
         """Vectorizes the GT color annotation image the same way as predictions to obtain GT linestrings."""
-        gt_path = os.path.join(cfg.DATASET_PATH, "color_annotations", "validation", f"{image_id}.png")
+        gt_path = os.path.join(cfg.color_label_dir("validation"), f"{image_id}.png")
         gt_img = cv2.imread(gt_path)
         if gt_img is None:
             return []

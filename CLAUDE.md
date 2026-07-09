@@ -37,27 +37,34 @@
 - `core/` — 공유 라이브러리(직접 실행 X): `lane_stitcher.py`, `evaluator.py`,
   `baseline_opensatmap.py`, `stitch_config.py`, `util.py`, `show_imgs.py`
   (`evaluator.py`·`lane_stitcher.py`의 `main()`은 실제 실행용이 아니라 동작 확인용 스모크 테스트다)
-- `inference/` — 세그멘테이션 추론 → 모델별 `pred_val`/`pred_test`
-- `dataprep/` — GT 생성 (`merge_annotation.py`=COCO GT, `make_seg_labels.py`=라벨 PNG)
-- `experiment/` — 파이프라인 실행·평가 (`run_experiments.py`, `run_best_experiment.py`, `run_baseline.py`)
+- `dataprep/` — 데이터셋 빌드: `build_dataset.py`(메인, SEED 원본 → `ade20k/`+`coco/` 전체 split),
+  `make_seg_labels.py`(ADE20K 인덱스 라벨 생성 라이브러리/부분 재생성), `merge_annotation.py`(COCO 병합 GT 라이브러리/부분 재생성)
+- `inference/` — 세그멘테이션 추론 → 모델별 `pred_val`/`pred_test` (입력 이미지는 `ade20k/images/<split>`)
+- `experiment/` — 파이프라인 실행·평가 (`run_experiments.py`, `run_parallel_sweep.py`(병렬 재현),
+  `run_best_experiment.py`, `run_baseline.py`)
 - `tables/` — 논문 Table 1~5 (`table_1.py`~`table_5.py`, `num_params.py`, 공통 헬퍼 `table_common.py`)
 - `figures/` — 논문 Figure 1~8 (`figure_1.py`~`figure_8.py`, 공통 렌더 헬퍼 `figure_*.py`)
 - `import` 경로는 `_bootstrap.py`가 `core/`·`tables/`·`figures/`를 sys.path에 등록해 유지된다.
 
+데이터 중복 없음: 모든 GT(인덱스 라벨·컬러 라벨·COCO 병합 GT)는 `ade20k/`·`coco/`에 한 벌만 존재하고,
+모든 스크립트가 `config`의 `image_dir/label_dir/color_label_dir/coco_anno_path` 헬퍼로 그 한 벌을 참조한다.
+원본 SEED(`satellite_good_matching_250206`)는 `build_dataset.py`만 읽는다.
+
 ```bash
 cd src
 
-# 1. 세그멘테이션 추론 → <model>/pred_val, <model>/pred_test
+# 1. 데이터셋 빌드 (SEED 원본 → ade20k/ + coco/, 최초 1회. train/val/test 전체)
+python dataprep/build_dataset.py                     # 옵션: --split validation test / --skip images
+
+# 2. 세그멘테이션 추론 → <model>/pred_val, <model>/pred_test (ade20k/images 입력)
 python inference/infer_internimage.py
 python inference/infer_mask2former.py
 
-# 2. GT 생성 (둘 다 동일 SEED 벡터 라벨에서 파생)
-python dataprep/merge_annotation.py      # COCO GT: merged_annotations_{val,test}.json (AP용)
-python dataprep/make_seg_labels.py       # 인덱스 라벨 PNG: labels/{val,test}/ (mIoU용)
-
 # 3. 파이프라인 실행·평가 (validation에서 파라미터 탐색 후 test에 best 적용)
 python experiment/run_experiments.py --split validation test
+MAXJOBS=14 python experiment/run_parallel_sweep.py   # 동일 결과 병렬 재현(권장, 훨씬 빠름)
 python experiment/run_experiments.py --fast          # 창·콜라주 생략 고속 평가
+python experiment/run_experiments.py --eval-only     # 예측 재사용, 평가만 재실행(GT 변경 시)
 python experiment/run_best_experiment.py             # best 조합 단일 실행
 python experiment/run_baseline.py                    # OpenSatMap watershed baseline 비교
 
@@ -79,18 +86,24 @@ python figures/figure_1.py               # ... figure_8.py 까지
 
 `src/config.py`에 모든 경로가 정의되어 있다. **실행 전 반드시 수정해야 한다:**
 - `DATA_ROOT`: 데이터셋과 모델 출력이 저장된 루트 디렉토리
-- `DATASET_PATH`: ADE20K 형식의 데이터셋 경로 (`DATA_ROOT/ade20k`)
-- `RESULT_DIR`: 출력(예측 JSON·CSV·Figure·Table) 저장 폴더명. 실행마다 바꿔 결과를 분리 보관한다 (예: `results_260624`)
+- `SRC_DATASET_PATH`: 원본 SEED 소스 (`image/`·`label/`·`dataset.json`). `build_dataset.py`만 읽는다
+- `DATASET_PATH`: 빌드된 ADE20K 데이터셋 경로 (`DATA_ROOT/ade20k`) — 이미지·인덱스 라벨·컬러 라벨
+- `COCO_PATH`: 빌드된 COCO 데이터셋 경로 (`DATA_ROOT/coco`) — 병합 인스턴스 GT + 이미지
+- `RESULT_DIR`: 출력(예측 JSON·CSV·Figure·Table) 저장 폴더명. 실행마다 바꿔 결과를 분리 보관한다 (예: `results_260709`)
 - `RESULT_PATH`: 출력 경로 (`DATA_ROOT/RESULT_DIR`)
-- `ANNO_DIR`: GT(`merged_annotations.json`)가 있는 폴더명. 기본값은 `RESULT_DIR`과 동일(결과 폴더가 GT까지 포함한 자족적 단위). 여러 실행이 공유하는 GT를 쓰려면 별도 폴더명으로 지정
-- `COCO_MERGED_ANNO_PATH`: GT COCO 어노테이션 JSON 파일 경로 (`DATA_ROOT/ANNO_DIR/merged_annotations.json`)
-- `DATA_PATH`: 데이터셋 경로 (`DATASET_PATH`와 동일)
-- `LABEL_PATH`: GT 레이블 이미지 경로 (`DATASET_PATH/annotations/validation`)
-- `COCO_ANNO_PATH`: COCO 형식 GT 어노테이션 파일 경로 (`COCO_MERGED_ANNO_PATH`와 동일)
+- `EVAL_SPLITS`: 평가 대상 split (`validation`, `test`) / `ALL_SPLITS`: 빌더가 만드는 전체 split
+
+split→경로 헬퍼로 모든 스크립트가 데이터를 참조한다(중복 없음):
+- `image_dir(split)` = `ade20k/images/<split>`, `label_dir(split)` = `ade20k/annotations/<split>`(mIoU GT),
+  `color_label_dir(split)` = `ade20k/color_annotations/<split>`
+- `coco_anno_path(split)` = `coco/annotations/instances_<split>2017.json`(COCO AP GT),
+  `coco_image_dir(split)` = `coco/<split>2017`
+- `LABEL_PATH`/`COCO_MERGED_ANNO_PATH`/`COCO_ANNO_PATH`/`DATA_PATH`는 validation 기본 별칭(기존 스크립트 호환)
+- ADE20K는 train split 폴더명이 `training`이다(`ADE_SPLIT_DIR`), COCO 이미지 폴더는 `train2017/val2017/test2017`(`COCO_IMG_DIR`)
 
 ### 클래스 메타정보
 - `METAINFO`: 클래스 ID, 이름, RGB 색상을 정의하는 딕셔너리 리스트. ID 0은 ignore, ID 1~11이 실제 차선 클래스
-- `EXCLUDE_IDS`: 평가에서 제외할 클래스 ID 목록 (`[0, 8, 10, 11]`)
+- `EXCLUDE_IDS`: 평가에서 제외할 클래스 ID 목록 (`[0, 8, 10]`, bicycle_lane(11)은 평가 포함)
 - `EVAL_CLASS_IDS`: 실제 평가에 사용되는 클래스 ID 목록 (METAINFO에서 EXCLUDE_IDS를 제외하고 자동 생성)
 - `ID2BGR`: 클래스 ID → BGR 색상 튜플 매핑. 예측 이미지에서 클래스별 픽셀을 추출할 때 사용
 - `ID2NAME`: 클래스 ID → 클래스 이름 문자열 매핑. 테이블 출력 시 사용
@@ -111,15 +124,18 @@ python figures/figure_1.py               # ... figure_8.py 까지
 ### 데이터 흐름
 
 ```
-ade20k/images/validation/*.png                   ← 입력 위성 이미지
-ade20k/annotations/validation/*.png             ← GT 팔레트 인덱스 레이블 이미지
+satellite_good_matching_250206/{image,label}   ← 원본 SEED 소스
+        ↓ dataprep/build_dataset.py
+ade20k/images/<split>/*.png                      ← 입력 위성 이미지
+ade20k/annotations/<split>/*.png                 ← GT 인덱스 레이블 (mIoU)
+coco/annotations/instances_<split>2017.json      ← GT 병합 인스턴스 (COCO AP)
 Internimage/ (또는 mask2former/)
-  └─ <model_name>/prediction/*.png              ← 세그멘테이션 모델 출력 (클래스별 색상 코딩)
+  └─ <model_name>/{pred_val,pred_test}/*.png     ← 세그멘테이션 모델 출력 (클래스별 색상 코딩)
         ↓
 LaneStitcher.detect_lines()
         ↓
-coco_pred_instances_origin.json                  # 초기 벡터화 결과 (skeletonization 직후)
-coco_pred_instances_merge{1,2,3}.json            # 단계별 병합 결과 (merge3가 최종)
+coco_pred_{val,test}_origin.json                 # 초기 벡터화 결과 (skeletonization 직후)
+coco_pred_{val,test}_merge{1,2}.json             # 단계별 병합 결과 (merge2가 최종)
         ↓
 [Table 생성]  (논문 Table 1~5, 공통 헬퍼 tables/table_common.py)
 tables/num_params.py → num_params.csv             # 모델별 파라미터 수
@@ -137,54 +153,36 @@ figures/figure_1.py ~ figures/figure_8.py → RESULT_PATH/Figure/*   # 논문 Fi
 
 ```
 DATA_ROOT/
-  ade20k/
-    images/
-      ├─ training/*.png
-      ├─ validation/*.png                 # 원본 위성 이미지
-      └─ test/*.png
-    annotations/
-      ├─ training/*.png
-      ├─ validation/*.png                 # GT 팔레트 인덱스 레이블 이미지
-      └─ test/*.png
-    color_annotations/
-      ├─ training/*.png
-      ├─ validation/*.png                 # GT 컬러 시각화 레이블 이미지
-      └─ test/*.png
+  satellite_good_matching_250206/          # 원본 SEED 소스 (build_dataset.py만 읽음)
+    ├─ image/*.png                         # 위성 이미지 (train+val+test = 12828)
+    ├─ label/*.json                        # SEED 벡터 라벨
+    └─ dataset.json                        # split별 basename 목록
+  ade20k/                                   # 빌드된 ADE20K 시맨틱 세그 데이터셋
+    images/{training,validation,test}/*.png            # 위성 이미지
+    annotations/{training,validation,test}/*.png       # 인덱스 라벨 (pixel = class_id+1, mIoU GT)
+    color_annotations/{training,validation,test}/*.png # 컬러 시각화 라벨
+  coco/                                     # 빌드된 COCO 인스턴스 세그 데이터셋
+    ├─ annotations/instances_{train,validation,test}2017.json   # 병합 인스턴스 GT (COCO AP)
+    ├─ annotations/instances_{...}2017_selected.json            # 평가 캐시(EXCLUDE_IDS 필터+id/area/iscrowd, 자동 생성/무효화)
+    ├─ {train2017,val2017,test2017}/*.png                       # 위성 이미지
+    └─ class_counts.csv                                         # split×클래스 인스턴스 수
   Internimage/
-    ├─ checkpoint/                        # InternImage 체크포인트 (.pth)
+    ├─ checkpoint/*.pth                     # InternImage 체크포인트
     └─ satellite_ade20k_250925_internimage_large/
-         └─ prediction/*.png              # 색상 코딩된 세그멘테이션 예측
+         ├─ pred_val/*.png  pred_test/*.png # 색상 코딩된 세그멘테이션 예측
+         └─ metrics_{validation,test}.json  # segmentation-prediction mIoU 캐시
   mask2former/
-    ├─ checkpoint/                        # Mask2Former 체크포인트 (.pth)
-    ├─ pre_trained/
-    ├─ satellite_ade20k_250925_mask2former_large/
-    │    └─ prediction/*.png
-    └─ satellite_ade20k_250925_mask2former_small/
-         └─ prediction/*.png
-  results/
-    ├─ merged_annotations.json             # COCO 형식 GT 어노테이션
-    ├─ selected_annotation.json           # 평가용 GT 캐시: merged_annotations.json에서 EXCLUDE_IDS 클래스를 제거하고 COCO 평가 필드(id/iscrowd/area)를 보강한 것 (이미지 선별이 아니라 클래스 필터링). 원본보다 오래되면 자동 무효화 후 재생성됨
-    ├─ num_params.csv                     # 모델별 파라미터 수
-    ├─ total_performance.csv              # 하이퍼파라미터 전체 성능 탐색 결과
+    ├─ checkpoint/  pre_trained/            # Mask2Former 체크포인트
+    └─ satellite_ade20k_250925_mask2former_{large,small}/{pred_val,pred_test}/*.png
+  results_<date>/                           # RESULT_DIR (실행마다 분리 보관)
+    ├─ total_performance.csv                # 하이퍼파라미터 전체 성능 탐색 결과
+    ├─ num_params.csv                       # 모델별 파라미터 수
+    ├─ coco_pred_instances_baseline.json    # (run_baseline) OpenSatMap baseline 예측
+    ├─ _combo_logs/                         # (run_parallel_sweep) 조합별 로그
     ├─ <model_name>/
-    │    └─ thick=T,stride=S,extend=E/     # 하이퍼파라미터 조합별 출력
-    │         ├─ coco_pred_instances_origin.json
-    │         ├─ coco_pred_instances_merge1.json
-    │         ├─ coco_pred_instances_merge2.json
-    │         ├─ coco_pred_instances_merge3.json
+    │    └─ thick=T,stride=S,extend=E,turn=P/          # 하이퍼파라미터 조합별 출력
+    │         ├─ coco_pred_{val,test}_{origin,merge1,merge2}.json
     │         └─ eval_result.csv
-    ├─ Tables/
-    │    ├─ table_1.csv
-    │    ├─ table_2.csv
-    │    ├─ table_3.csv
-    │    ├─ table_4.csv
-    │    └─ table_5.csv
-    └─ Figure/
-         ├─ Figure_1/                     # figure_1.py 출력 (개별 시각화 마스크)
-         ├─ Figure_2/                     # figure_2.py 출력 (2x2 콜라주 [이미지명].jpg)
-         ├─ Figure_3/                     # figure_3.py 출력 (Guiding/Safety [이미지명].png)
-         ├─ Figure_4/                     # figure_4.py 출력 (center_line 병합과정 1x4 콜라주)
-         ├─ Figure_5/                     # figure_5.py 출력 (1x3 원본-GT-Prediction 콜라주)
-         ├─ Figure_compare/               # figure_compare.py 출력 (2x2 GT-모델3종 segmentation overlay 콜라주)
-         └─ figure1.jpg                   # figure_1_fin.py 출력 (최종 세로형 콜라주)
+    ├─ Tables/table_1.csv .. table_5.csv
+    └─ Figure/Figure_1 .. Figure_8, ...     # figure_1.py ~ figure_8.py 출력
 ```

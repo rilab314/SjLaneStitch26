@@ -286,11 +286,8 @@ class LaneStitcher:
         os.makedirs(self._result_path, exist_ok=True)
 
     def _split_image_files(self):
-        """List of original satellite image paths belonging to the current split (per dataset.json)."""
-        with open(cfg.DATASET_SPLIT_JSON, 'r') as f:
-            bases = json.load(f)[self._split]
-        files = [os.path.join(cfg.SRC_IMAGE_DIR, b + '.png') for b in sorted(bases)]
-        return [f for f in files if os.path.exists(f)]
+        """Sorted satellite image paths for the current split (from the built ade20k dataset)."""
+        return sorted(glob.glob(os.path.join(cfg.image_dir(self._split), '*.png')))
 
     def detect_lines(self, image_ids=None, desc=None):
         file_list = self._split_image_files()
@@ -427,7 +424,7 @@ class LaneStitcher:
         anno_img = None
         if self._visualize:
             # color GT overlay (visualization only). May be absent for the test split, so None is allowed.
-            anno_file = os.path.join(cfg.DATASET_PATH, 'color_annotations', self._split, base)
+            anno_file = os.path.join(cfg.color_label_dir(self._split), base)
             anno_img = cv2.imread(anno_file)
         # images = {'image': image, 'GT_img': anno_img, 'pred_img': pred_img}
         # self._imshow_base.show_imgs(images)

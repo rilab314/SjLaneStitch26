@@ -32,7 +32,7 @@ class FigureGenerator:
         self._out_dir = os.path.join(cfg.RESULT_PATH, "Figure", self.name)
         os.makedirs(self._out_dir, exist_ok=True)
         self._val_files = sorted(glob.glob(
-            os.path.join(cfg.DATASET_PATH, "images", "validation", "*.png")))
+            os.path.join(cfg.image_dir("validation"), "*.png")))
         self._gt_map = None
 
     def build_detector(self):

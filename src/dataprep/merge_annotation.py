@@ -218,15 +218,18 @@ class MergeAnnotator:
     dev_time_limit = None  # dev run time limit (seconds). None processes the entire dataset
 
     def __init__(self, split: str, image_ids: List[str], label_path: str,
-                 image_path: str, compare_path: str, coco_path: str):
+                 image_path: str, compare_path: str, coco_path: str,
+                 write_compare: bool = True):
         self._split = split
         self._image_ids = image_ids
         self._label_path = label_path
         self._image_path = image_path
         self._compare_path = compare_path
         self._coco_path = coco_path
+        self._write_compare = write_compare  # save before/after overlay PNGs (off for bulk dataset build)
         self._img_shape = (768, 768)
-        os.makedirs(self._compare_path, exist_ok=True)
+        if self._write_compare:
+            os.makedirs(self._compare_path, exist_ok=True)
         os.makedirs(os.path.dirname(self._coco_path), exist_ok=True)
 
         # SEED category name -> METAINFO class id (matches the output format to the GT)
@@ -300,15 +303,17 @@ class MergeAnnotator:
                 if ann is not None:
                     coco_annotations.append(ann)
 
-            # display and save the comparison image
-            compare = self._make_compare_image(image, lanes, merged, base)
-            self._save_compare(compare, base)
-            if self._enabled:
-                try:
-                    cv2.imshow('merge compare (before | after)', compare)
-                    cv2.waitKey(1)
-                except cv2.error:
-                    self._enabled = False
+            # display and save the comparison image (skipped for bulk dataset build)
+            if self._write_compare or self._enabled:
+                compare = self._make_compare_image(image, lanes, merged, base)
+                if self._write_compare:
+                    self._save_compare(compare, base)
+                if self._enabled:
+                    try:
+                        cv2.imshow('merge compare (before | after)', compare)
+                        cv2.waitKey(1)
+                    except cv2.error:
+                        self._enabled = False
 
             if self.dev_time_limit is not None and (time.time() - start_time) > self.dev_time_limit:
                 print(f'\n[run] dev time limit ({self.dev_time_limit}s) reached -> stopping')
@@ -675,7 +680,7 @@ class MergeAnnotator:
 
 
 def _split_coco_path(split: str) -> str:
-    """Per-split merged_annotations_{split}.json path (inside the result folder RESULT_PATH)."""
+    """Per-split COCO instance GT path in the built coco dataset (coco/annotations/instances_{split}2017.json)."""
     return cfg.coco_anno_path(split)
 
 

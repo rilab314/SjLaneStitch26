@@ -28,7 +28,7 @@ class Table2Builder:
         self.pred_json = pred_json_path
         self.save_name = save_name
         self.gt_json = cfg.COCO_MERGED_ANNO_PATH
-        self.label_dir = os.path.join(cfg.DATASET_PATH, "annotations", "validation")
+        self.label_dir = cfg.label_dir("validation")
 
     def build(self):
         print(f"pred_json: {self.pred_json}")

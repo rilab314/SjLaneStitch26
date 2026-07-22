@@ -1,0 +1,7 @@
+# DCNv3 build artifacts
+build/
+dist/
+*.egg-info/
+*.egg
+*.so
+*.o

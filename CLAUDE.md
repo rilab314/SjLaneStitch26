@@ -30,8 +30,8 @@
 
 ## 실행 방법
 
-`src/`는 종류별 하위 폴더로 정리되어 있다. 직접 실행하는 스크립트 목록·순서의 상세는
-`src/README.md`(영문)를 참고한다. 모든 명령은 `src/`에서 실행한다.
+`src/`는 종류별 하위 폴더로 정리되어 있다. 프로젝트 개요·데이터 준비·패키지 설치·직접 실행하는
+스크립트 목록·순서의 상세는 저장소 루트의 `README.md`(영문)를 참고한다. 모든 명령은 `src/`에서 실행한다.
 
 폴더 구조 요약:
 - `core/` — 공유 라이브러리(직접 실행 X): `lane_stitcher.py`, `evaluator.py`,
@@ -140,7 +140,7 @@ coco_pred_{val,test}_merge{1,2}.json             # 단계별 병합 결과 (merg
 tables/num_params.py → num_params.csv             # 모델별 파라미터 수
 tables/table_1.py    → table_1.csv                # 모델 비교 (segmentation vs merge×1), val·test
 tables/table_2.py    → table_2.csv                # best 모델 클래스별 성능 (count·F1@0.5·mIoU)
-tables/table_3.py    → table_3.csv                # best 모델 클래스별 진단 분해 (6지표)
+tables/table_3.py    → table_3.csv                # best 모델 클래스별 진단 분해 (precision·recall·near_miss_gt·merge_ratio·miou_match)
 tables/table_4.py    → table_4.csv                # 단계별 향상 (baseline→residual→refinement→merge1→merge2)
 tables/table_5.py    → table_5.csv                # 파라미터 ablation (stride·extend·turn)
         ↓

@@ -135,18 +135,18 @@ each label/GT and relocating `DATA_ROOT` only touches `config.py`.
 
 ## 3. Requirements & installation
 
-**Python 3.9** is recommended.
+**Python 3.10** is recommended.
 
 ### Post-processing pipeline (this repo)
 
 ```bash
-pip install -r requirements.txt        # scikit-image, opencv, scipy, numpy, ...
-pip install pycocotools pandas shapely # additional pipeline/evaluation deps
+pip install -r requirements.txt
 ```
 
-`requirements.txt` pins the vectorization/thinning stack (scikit-image, opencv, scipy,
-networkx, …). The evaluator and table/figure scripts additionally use `pycocotools`,
-`pandas`, and `shapely`.
+`requirements.txt` lists only the top-level packages the pipeline imports directly
+(numpy, opencv-contrib-python, pandas, pycocotools, shapely, tqdm); their transitive
+sub-dependencies install automatically. Zhang–Suen thinning uses
+`cv2.ximgproc.thinning`, so **opencv-contrib**-python (not plain opencv-python) is required.
 
 ### Segmentation inference (optional, separate environment)
 

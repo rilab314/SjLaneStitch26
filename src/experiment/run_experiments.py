@@ -9,10 +9,10 @@ import _bootstrap  # noqa: F401  # registers core/tables/figures on sys.path
 
 import config as cfg
 from lane_stitcher import LaneStitcher
-from evaluator import evaluate_all, evaluate_coco_ap, _filename_to_merge_count
+from evaluator import evaluate_all, evaluate_f1, _filename_to_merge_count, _order_eval_columns
 
 
-BEST_MODEL = 'mask2former_large'   # Swin-L backbone, best AP20 model. Only this model gets the full parameter sweep
+BEST_MODEL = 'mask2former_large'   # Swin-L backbone, best F1 model. Only this model gets the full parameter sweep
 
 
 def run_experiments(splits, visualize=True):
@@ -65,7 +65,8 @@ def run_experiments(splits, visualize=True):
         try:
             bs, be, btp = _best_param_combo(best_short)
         except (FileNotFoundError, ValueError, KeyError):
-            print("Error: the validation total_performance.csv (AP20(val)) required for test evaluation is missing. "
+            print(f"Error: the validation total_performance.csv ({cfg.mcol(cfg.F1_PRIMARY, 'validation')}) "
+                  "required for test evaluation is missing. "
                   "Run validation first with '--split validation' (or without specifying a split).")
             return
         print(f"\ntest evaluation parameters (validation-optimal): stride={bs}, extend={be}, turn={btp}")
@@ -79,12 +80,12 @@ def run_experiments(splits, visualize=True):
 
 
 def _best_param_combo(model_name_short):
-    """(stride, extend, turn) of the row with the highest AP20(val) for the given model in total_performance.csv."""
+    """(stride, extend, turn) of the row with the highest F1(val) for the given model in total_performance.csv."""
     tp_path = os.path.join(cfg.RESULT_PATH, "total_performance.csv")
     df = pd.read_csv(tp_path)
     df = df[df["model_name"] == model_name_short]
-    ap = cfg.mcol("AP20", "validation")  # 'AP20(val)'
-    best = df.loc[df[ap].idxmax()]
+    metric = cfg.primary_metric_col(df.columns)  # e.g. 'F1@0.5(val)'
+    best = df.loc[df[metric].idxmax()]
     return int(best["sample_strides"]), int(best["extend_lens"]), int(best["turn_penalties"])
 
 
@@ -118,11 +119,11 @@ def run_single_experiment(model_path, model_name, t, s, e, tp, split,
 
 
 def eval_only(splits=None):
-    """Skip detection and re-run only the evaluation using existing prediction JSON (coco_pred_instances_*.json).
+    """Skip detection and re-run only the evaluation using existing prediction JSON (coco_pred_{val|test}_*.json).
 
-    When only the GT (merged_annotations_{split}.json) changed, mIoU depends solely on the label PNG
-    and prediction JSON, so it does not change and only AP changes. Therefore recompute only AP and
-    reuse mIoU/instances as-is from the existing eval_result.csv (fall back to full evaluation if no
+    mIoU depends solely on the label PNG and prediction JSON, so as long as those are unchanged only
+    the object metric (F1) needs recomputing. Therefore recompute only the F1 columns and reuse
+    mIoU/instances as-is from the existing eval_result.csv (fall back to full evaluation if no
     existing CSV). Both val and test are processed. The selected_annotation cache is automatically
     invalidated by the evaluator when the GT is newer."""
     model_by_name = {os.path.basename(p): p for p in find_model_paths(cfg.DATA_ROOT)}
@@ -134,14 +135,14 @@ def eval_only(splits=None):
         pred_files = glob.glob(os.path.join(cfg.RESULT_PATH, '*', '*',
                                             f'coco_pred_{label}_*.json'))
         result_dirs = sorted({os.path.dirname(f) for f in pred_files})
-        print(f"[{split}] Re-evaluating AP for {len(result_dirs)} result dirs "
+        print(f"[{split}] Re-evaluating F1 for {len(result_dirs)} result dirs "
               f"(skip detection/mIoU, GT={coco_gt_json})")
 
         for result_path in result_dirs:
             # path structure: RESULT_PATH / [model_name] / [param_name]
             model_name = os.path.basename(os.path.dirname(result_path))
-            print(f"\n{'='*80}\nEvaluating AP[{split}]: {model_name} / {os.path.basename(result_path)}\n{'='*80}")
-            if _reeval_ap_only(coco_gt_json, result_path, split):
+            print(f"\n{'='*80}\nEvaluating F1[{split}]: {model_name} / {os.path.basename(result_path)}\n{'='*80}")
+            if _reeval_f1_only(coco_gt_json, result_path, split):
                 continue
             # fall back to full evaluation including mIoU if there is no existing eval_result.csv
             model_path = model_by_name.get(model_name)
@@ -150,31 +151,36 @@ def eval_only(splits=None):
                 continue
             evaluate_all(coco_gt_json, label_path, model_path, result_path, split)
 
-    print("\nEval-only(AP) completed.")
+    print("\nEval-only(F1) completed.")
 
 
-def _reeval_ap_only(coco_gt_json, result_path, split):
-    """Keep mIoU/instances in the existing eval_result.csv and recompute/overwrite only this split's AP columns with the new GT.
+def _reeval_f1_only(coco_gt_json, result_path, split):
+    """Keep mIoU in the existing eval_result.csv and recompute/overwrite only this split's F1 columns.
 
-    mIoU depends on the label PNG and prediction JSON rather than the GT, so it does not change when the GT changes.
-    Returns False if this split's AP columns are not in the CSV (caller falls back to full evaluation)."""
+    Stale AP columns from older runs are dropped. Returns False if this split was never evaluated
+    (no mIoU column in the CSV -> caller falls back to full evaluation)."""
     csv_path = os.path.join(result_path, 'eval_result.csv')
     if not os.path.exists(csv_path):
         return False
     label = cfg.split_label(split)
     df = pd.read_csv(csv_path)
-    ap_cols = {m: cfg.mcol(m, split) for m in ('AP10', 'AP20', 'AP50')}  # {'AP10':'AP10(val)',...}
-    if not any(c in df.columns for c in ap_cols.values()):
+    if cfg.mcol('mIoU', split) not in df.columns:
         return False  # this split's columns don't exist yet -> full evaluation
+    # drop object-metric columns of retired thresholds/metrics (old AP columns, F1 not in F1_IOUS)
+    valid = {cfg.mcol(m, sp) for m in cfg.F1_METRICS for sp in cfg.EVAL_SPLITS}
+    stale = [c for c in df.columns
+             if c.startswith(('AP10(', 'AP20(', 'AP50(', 'F1@')) and c not in valid]
+    df = df.drop(columns=stale)
     for json_file in sorted(glob.glob(os.path.join(result_path, f'coco_pred_{label}_*.json'))):
         mc = _filename_to_merge_count(json_file)
-        ap = evaluate_coco_ap(coco_gt_json, json_file)  # {instances, AP10, AP20, AP50}
+        f1 = evaluate_f1(coco_gt_json, json_file)  # {instances, F1@0.5, ...}
         mask = df['merge_count'] == mc
         if not mask.any():
             continue
-        for m, col in ap_cols.items():  # update AP only; keep existing mIoU/instances values
-            if col in df.columns and m in ap:
-                df.loc[mask, col] = float(ap[m])
+        df.loc[mask, cfg.mcol('instances', split)] = int(f1['instances'])
+        for m in cfg.F1_METRICS:  # update F1 only; keep existing mIoU values
+            df.loc[mask, cfg.mcol(m, split)] = float(f1[m])
+    df = _order_eval_columns(df)
     df.to_csv(csv_path, index=False, encoding='utf-8')
     print(df.to_string(index=False))
     return True
@@ -214,17 +220,17 @@ def find_best_model_and_params():
     merged_df.to_csv(save_path, index=False, encoding='utf-8')
     print(f"Merged results saved to: {save_path}")
 
-    ap = cfg.mcol('AP20', 'validation')  # 'AP20(val)'
-    if ap in merged_df.columns:
-        top10 = merged_df.sort_values(by=ap, ascending=False, na_position='last').head(10)
-        print(f"\nTop 10 combinations by {ap}:")
+    metric = cfg.mcol(cfg.F1_PRIMARY, 'validation')  # 'F1@0.5(val)'
+    if metric in merged_df.columns:
+        top10 = merged_df.sort_values(by=metric, ascending=False, na_position='last').head(10)
+        print(f"\nTop 10 combinations by {metric}:")
         print(top10.to_string(index=False))
 
 
 def _order_total_columns(df):
-    """Column order: metadata -> metrics (split=val->test, in instances/AP10/AP20/AP50/mIoU order). Round and cast types."""
+    """Column order: metadata -> metrics (split=val->test, in instances/F1/mIoU order). Round and cast types."""
     meta = ['model_name', 'merge_count', 'thicknesses', 'sample_strides', 'extend_lens', 'turn_penalties']
-    metrics = ['instances', 'AP10', 'AP20', 'AP50', 'mIoU']
+    metrics = ['instances', *cfg.F1_METRICS, 'mIoU']
     metric_cols = [f'{m}({l})' for l in ('val', 'test') for m in metrics if f'{m}({l})' in df.columns]
     for c in metric_cols:
         num = pd.to_numeric(df[c], errors='coerce')

@@ -1,7 +1,7 @@
 # LaneStitch — source layout & reproduction guide
 
 Pipeline that vectorizes satellite-image segmentation into lane polylines, stitches
-fragmented lines into whole lanes, and evaluates them (COCO AP + pixel mIoU) for the
+fragmented lines into whole lanes, and evaluates them (object F1 at IoU 0.5 + pixel mIoU) for the
 paper's tables and figures.
 
 The whole experiment is reproducible from a raw SEED source in five steps
@@ -19,7 +19,7 @@ src/
 
   core/                # shared libraries (imported, not run directly)
     lane_stitcher.py       # LaneStitcher: segmentation -> polyline vectorization & merge
-    evaluator.py           # COCO AP + mIoU evaluation
+    evaluator.py           # object F1 (greedy IoU matching) + mIoU evaluation
     stitch_config.py       # best-config loader from total_performance.csv
     util.py  show_imgs.py
 
@@ -56,7 +56,7 @@ DATA_ROOT/
     color_annotations/{training,validation,test}/*.png # color visualization labels
 
   coco/                             COCO instance-seg dataset    (built)
-    annotations/instances_{train,validation,test}2017.json   # merged lane GT  (COCO AP)
+    annotations/instances_{train,validation,test}2017.json   # merged lane GT  (object F1)
     {train2017,val2017,test2017}/*.png                       # images
 
   Internimage/  mask2former/        model predictions <model>/{pred_val,pred_test}/*.png
@@ -116,7 +116,7 @@ MAXJOBS=14 python experiment/run_parallel_sweep.py
 
 # other entry points:
 python experiment/run_experiments.py --fast        # skip windows/collages
-python experiment/run_experiments.py --eval-only    # re-evaluate existing predictions (GT changed)
+python experiment/run_experiments.py --eval-only    # recompute F1 only from existing predictions
 python experiment/run_best_experiment.py            # single run with the best config
 ```
 
@@ -132,7 +132,7 @@ python tables/num_params.py    # model parameter counts (Table 1 Params column)
 python tables/table_1.py       # model comparison (segmentation vs merge x1), val/test
 python tables/table_2.py       # best model, per-class performance
 python tables/table_3.py       # best model, per-class diagnostic breakdown
-python tables/table_4.py       # stage-wise gains (first->residual->refinement->merge1->merge2)
+python tables/table_4.py       # stage-wise gains (baseline->residual->refinement->merge1->merge2)
 python tables/table_5.py       # parameter ablation (stride/extend/turn)
 ```
 

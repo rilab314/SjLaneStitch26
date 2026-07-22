@@ -2,7 +2,8 @@
 
 Shared by figure_7 (all-class combined panel) and figure_8 (per-class).
 Matching: within the same image and same class, greedily 1:1 matches prediction masks (thickness render)
-and GT masks by IoU (IoU >= 0.2). TP = matched prediction, FP = unmatched prediction, FN = unmatched GT.
+and GT masks by IoU (IoU >= IOU_THR = cfg.F1_IOUS[0] = 0.5, the same operating point as the tables).
+TP = matched prediction, FP = unmatched prediction, FN = unmatched GT.
 """
 import os
 import sys
@@ -14,7 +15,7 @@ import config as cfg
 import figure_render as fr
 from evaluator import ann_to_mask
 
-IOU_THR = 0.2
+IOU_THR = cfg.F1_IOUS[0]  # 0.5
 TP, FP, FN = (0, 255, 0), (0, 0, 255), (255, 0, 0)  # BGR: green (matched prediction)/red (false detection)/blue (missed GT)
 
 

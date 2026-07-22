@@ -15,7 +15,7 @@
 1. InternImage/Mask2Former 세그멘테이션 모델의 예측 결과와 ADE20K 형식의 GT를 입력으로 받음
 2. 세그멘테이션 블롭을 Zhang-Suen 세선화(thinning)를 통해 `Strand`(폴리라인) 인스턴스로 변환
 3. 끝점 겹침 감지를 통해 단편화된 선을 병합(stitch)
-4. COCO AP(IoU 임계값 0.10, 0.20, 0.50)와 픽셀 단위 mIoU로 성능 평가
+4. 객체 단위 F1(그리디 IoU 매칭, IoU 0.5)과 픽셀 단위 mIoU로 성능 평가
 5. 논문 작성을 위한 CSV 테이블 및 시각화 그림(Figure) 생성
 
 ### 용어 정리 (line/lane 혼동 방지)
@@ -72,7 +72,7 @@ python tables/num_params.py              # 모델별 파라미터 수 (Table 1 P
 python tables/table_1.py                 # 모델 비교 (segmentation vs merge×1), val·test
 python tables/table_2.py                 # best 모델 클래스별 성능
 python tables/table_3.py                 # best 모델 클래스별 진단 분해
-python tables/table_4.py                 # 단계별 향상 (first→residual→refinement→merge1→merge2)
+python tables/table_4.py                 # 단계별 향상 (baseline→residual→refinement→merge1→merge2)
 python tables/table_5.py                 # 파라미터 ablation (stride·extend·turn)
 
 # 5. 그림 (→ RESULT_PATH/Figure/*)
@@ -95,7 +95,7 @@ python figures/figure_1.py               # ... figure_8.py 까지
 split→경로 헬퍼로 모든 스크립트가 데이터를 참조한다(중복 없음):
 - `image_dir(split)` = `ade20k/images/<split>`, `label_dir(split)` = `ade20k/annotations/<split>`(mIoU GT),
   `color_label_dir(split)` = `ade20k/color_annotations/<split>`
-- `coco_anno_path(split)` = `coco/annotations/instances_<split>2017.json`(COCO AP GT),
+- `coco_anno_path(split)` = `coco/annotations/instances_<split>2017.json`(객체 F1 GT),
   `coco_image_dir(split)` = `coco/<split>2017`
 - `LABEL_PATH`/`COCO_MERGED_ANNO_PATH`/`COCO_ANNO_PATH`/`DATA_PATH`는 validation 기본 별칭(기존 스크립트 호환)
 - ADE20K는 train split 폴더명이 `training`이다(`ADE_SPLIT_DIR`), COCO 이미지 폴더는 `train2017/val2017/test2017`(`COCO_IMG_DIR`)
@@ -127,7 +127,7 @@ satellite_good_matching_250206/{image,label}   ← 원본 SEED 소스
         ↓ dataprep/build_dataset.py
 ade20k/images/<split>/*.png                      ← 입력 위성 이미지
 ade20k/annotations/<split>/*.png                 ← GT 인덱스 레이블 (mIoU)
-coco/annotations/instances_<split>2017.json      ← GT 병합 인스턴스 (COCO AP)
+coco/annotations/instances_<split>2017.json      ← GT 병합 인스턴스 (객체 F1)
 Internimage/ (또는 mask2former/)
   └─ <model_name>/{pred_val,pred_test}/*.png     ← 세그멘테이션 모델 출력 (클래스별 색상 코딩)
         ↓
@@ -139,9 +139,9 @@ coco_pred_{val,test}_merge{1,2}.json             # 단계별 병합 결과 (merg
 [Table 생성]  (논문 Table 1~5, 공통 헬퍼 tables/table_common.py)
 tables/num_params.py → num_params.csv             # 모델별 파라미터 수
 tables/table_1.py    → table_1.csv                # 모델 비교 (segmentation vs merge×1), val·test
-tables/table_2.py    → table_2.csv                # best 모델 클래스별 성능 (count·mIoU·AP20)
+tables/table_2.py    → table_2.csv                # best 모델 클래스별 성능 (count·F1@0.5·mIoU)
 tables/table_3.py    → table_3.csv                # best 모델 클래스별 진단 분해 (6지표)
-tables/table_4.py    → table_4.csv                # 단계별 향상 (first→residual→refinement→merge1→merge2)
+tables/table_4.py    → table_4.csv                # 단계별 향상 (baseline→residual→refinement→merge1→merge2)
 tables/table_5.py    → table_5.csv                # 파라미터 ablation (stride·extend·turn)
         ↓
 [Figure 생성]
@@ -161,7 +161,7 @@ DATA_ROOT/
     annotations/{training,validation,test}/*.png       # 인덱스 라벨 (pixel = class_id+1, mIoU GT)
     color_annotations/{training,validation,test}/*.png # 컬러 시각화 라벨
   coco/                                     # 빌드된 COCO 인스턴스 세그 데이터셋
-    ├─ annotations/instances_{train,validation,test}2017.json   # 병합 인스턴스 GT (COCO AP)
+    ├─ annotations/instances_{train,validation,test}2017.json   # 병합 인스턴스 GT (객체 F1)
     ├─ annotations/instances_{...}2017_selected.json            # 평가 캐시(EXCLUDE_IDS 필터+id/area/iscrowd, 자동 생성/무효화)
     ├─ {train2017,val2017,test2017}/*.png                       # 위성 이미지
     └─ class_counts.csv                                         # split×클래스 인스턴스 수

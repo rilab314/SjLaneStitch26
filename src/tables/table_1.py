@@ -1,8 +1,8 @@
 """Table 1 — model comparison (segmentation vs merge×1), val/test side by side.
 
-Columns: Model | Params(M) | Stage | Instances(val) | AP20(val) | mIoU(val)
-                                    | Instances(test) | AP20(test) | mIoU(test)
-For each model, output a Segmentation row (instances/AP20 blank, mIoU only) and a Merge×1 row.
+Columns: Model | Params(M) | Stage | Instances | F1@0.5(val) | F1@0.5(test) | mIoU(val) | mIoU(test)
+Instances is the validation prediction count.
+For each model, output a Segmentation row (instances/F1 blank, mIoU only) and a Merge×1 row.
 Source: total_performance.csv (best params fixed, val/test columns) + num_params.csv.
 If the test columns do not exist yet (i.e. only validation was run), those values are shown as blank.
 """
@@ -45,10 +45,10 @@ class Table1Builder:
         return self.df[mask]
 
     def _segmentation_row(self, model, sub):
-        # pure segmentation reports mIoU only (instances/AP are blank)
+        # pure segmentation reports mIoU only (instances/F1 are blank)
         seg = sub[sub["merge_count"].isna()].iloc[0]
         return self._row(model, "Segmentation",
-                         {sp: {"instances": None, "AP20": None,
+                         {sp: {"instances": None, cfg.F1_PRIMARY: None,
                                "mIoU": seg.get(cfg.mcol("mIoU", sp))}
                           for sp in cfg.EVAL_SPLITS})
 
@@ -56,20 +56,19 @@ class Table1Builder:
         m1 = sub[sub["merge_count"] == tc.MERGE_COUNT].iloc[0]
         return self._row(model, f"Merge×{tc.MERGE_COUNT}",
                          {sp: {"instances": m1.get(cfg.mcol("instances", sp)),
-                               "AP20": m1.get(cfg.mcol("AP20", sp)),
+                               cfg.F1_PRIMARY: m1.get(cfg.mcol(cfg.F1_PRIMARY, sp)),
                                "mIoU": m1.get(cfg.mcol("mIoU", sp))}
                           for sp in cfg.EVAL_SPLITS})
 
     def _row(self, model, stage, per_split):
+        # one Instances column (validation count), then F1 val/test and mIoU val/test side by side
         row = {"Model": tc.MODEL_DISPLAY.get(model, model),
                "Params(M)": self.params_map.get(model),
-               "Stage": stage}
-        for sp in cfg.EVAL_SPLITS:
-            lbl = cfg.split_label(sp)
-            v = per_split[sp]
-            row[f"Instances({lbl})"] = _int_or_blank(v["instances"])
-            row[f"AP20({lbl})"] = _pct_or_blank(v["AP20"])
-            row[f"mIoU({lbl})"] = _pct_or_blank(v["mIoU"])
+               "Stage": stage,
+               "Instances": _int_or_blank(per_split["validation"]["instances"])}
+        for metric in (cfg.F1_PRIMARY, "mIoU"):
+            for sp in cfg.EVAL_SPLITS:
+                row[cfg.mcol(metric, sp)] = _pct_or_blank(per_split[sp][metric])
         return row
 
 

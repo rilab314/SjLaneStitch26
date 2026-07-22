@@ -1,7 +1,7 @@
 """Run experiments for only the single optimal combination in total_performance.csv.
 
 Instead of the full parameter sweep in run_experiments.py, generate the prediction JSON
-(coco_pred_instances_origin/merge*.json) and eval_result.csv for only the best AP20 model/parameter combination.
+(coco_pred_instances_origin/merge*.json) and eval_result.csv for only the best-F1 model/parameter combination.
 Reflects the current algorithm (num_merges, min_free_len, etc.) as-is.
 """
 import os
@@ -14,7 +14,8 @@ import config as cfg
 from stitch_config import build_config_from_csv, load_stitch_config, resolve_model_path
 from run_experiments import run_single_experiment
 
-# Reference result folder for determining the best combination (uses the highest-AP20 row in its total_performance.csv).
+# Reference result folder for determining the best combination (uses the highest-F1 row in its
+# total_performance.csv; legacy AP-format reference CSVs still resolve via primary_metric_col).
 # If None, uses the CSV in the current RESULT_PATH.
 REFERENCE_DIR = "results_260624"
 

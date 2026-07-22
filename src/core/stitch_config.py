@@ -1,6 +1,6 @@
 """Loader for the best combination (model and hyperparameters).
 
-Reads the highest-AP20 row of total_performance.csv and provides it as a StitchConfig.
+Reads the highest-F1 row of total_performance.csv and provides it as a StitchConfig.
 Shared by figure generation (Figure/figure_base) and single-run experiments (run_best_experiment).
 """
 import os
@@ -29,7 +29,7 @@ class StitchConfig:
 
 
 def load_stitch_config(prefer_model=DEFAULT_MODEL):
-    """Read the highest-AP20 combination from total_performance.csv and return it as a StitchConfig (defaults if absent)."""
+    """Read the highest-F1 combination from total_performance.csv and return it as a StitchConfig (defaults if absent)."""
     csv_path = os.path.join(cfg.RESULT_PATH, "total_performance.csv")
     if os.path.exists(csv_path):
         return build_config_from_csv(csv_path)
@@ -38,16 +38,16 @@ def load_stitch_config(prefer_model=DEFAULT_MODEL):
 
 
 def build_config_from_csv(csv_path):
-    """Select the highest-AP20(val) row from the CSV and build a StitchConfig."""
+    """Select the highest-F1(val) row from the CSV and build a StitchConfig."""
     frame = pd.read_csv(csv_path)
-    ap = cfg.mcol("AP20", "validation") if cfg.mcol("AP20", "validation") in frame.columns else "AP20"
-    best = frame.sort_values(ap, ascending=False, na_position="last").iloc[0]
+    metric = cfg.primary_metric_col(frame.columns)
+    best = frame.sort_values(metric, ascending=False, na_position="last").iloc[0]
     model_name = str(best["model_name"])
     model_path = resolve_model_path(model_name)
     print(f"[config] best: {model_name} thick={int(best['thicknesses'])} "
           f"stride={int(best['sample_strides'])} extend={int(best['extend_lens'])} "
           f"turn={float(best['turn_penalties'])} merge={int(best['merge_count'])} "
-          f"{ap}={float(best[ap]):.4f}")
+          f"{metric}={float(best[metric]):.4f}")
     return StitchConfig(
         model_name=model_name,
         model_path=model_path,

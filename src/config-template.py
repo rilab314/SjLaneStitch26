@@ -11,14 +11,14 @@ DATA_ROOT = "/media/humpback/435806fd-079f-4ba1-ad80-109c8f6e2ec0/Ongoing/2026_L
 #       annotations/{training,validation,test}/*.png       index labels (mIoU GT, pixel = class_id + 1)
 #       color_annotations/{training,validation,test}/*.png color visualization labels
 #   coco/   : COCO instance-segmentation format
-#       annotations/instances_{train,validation,test}2017.json  merged lane GT (COCO AP)
+#       annotations/instances_{train,validation,test}2017.json  merged lane GT (object F1)
 #       {train2017,val2017,test2017}/*.png                       satellite images
 # ────────────────────────────────────────────────────────────────────── #
 DATASET_PATH = DATA_ROOT + "/ade20k"   # ADE20K semantic-seg dataset
 COCO_PATH = DATA_ROOT + "/coco"        # COCO instance-seg dataset
 
 # Folder name for outputs (prediction JSON, CSV, Figure, Table). Change it per run to keep results separate.
-RESULT_DIR = "results_260709"
+RESULT_DIR = "results_260710"
 RESULT_PATH = os.path.join(DATA_ROOT, RESULT_DIR)
 
 # ────────────────────────────────────────────────────────────────────── #
@@ -48,7 +48,7 @@ COCO_IMG_DIR = {'train': 'train2017', 'validation': 'val2017', 'test': 'test2017
 # Model inference saves the pure class-color masks to <model>/pred_val, <model>/pred_test
 # (the former single 'prediction' folder is split per split).
 SPLIT_PRED_DIR = {'validation': 'pred_val', 'test': 'pred_test'}
-# Short split label to append to output filenames and CSV columns (coco_pred_val_*, AP20(val), etc.)
+# Short split label to append to output filenames and CSV columns (coco_pred_val_*, F1@0.5(val), etc.)
 SPLIT_LABEL = {'validation': 'val', 'test': 'test'}
 
 
@@ -63,8 +63,33 @@ def split_label(split):
 
 
 def mcol(metric, split):
-    """Per-split metric column name. e.g. mcol('AP20','test') -> 'AP20(test)'."""
+    """Per-split metric column name. e.g. mcol('F1@0.5','test') -> 'F1@0.5(test)'."""
     return f"{metric}({SPLIT_LABEL[split]})"
+
+
+# ────────────────────────────────────────────────────────────────────── #
+# Object metric (F1). The evaluator reports the object-level metric as
+# macro-averaged F1 over EVAL_CLASS_IDS, one column per IoU threshold in
+# F1_IOUS (replaces the old COCO AP10/AP20/AP50 columns).
+# ────────────────────────────────────────────────────────────────────── #
+F1_IOUS = [0.50]  # standard COCO-style matching threshold
+
+
+def f1_metric(iou):
+    """F1 column base name for an IoU threshold. e.g. 0.5 -> 'F1@0.5'."""
+    return f"F1@{iou:g}"
+
+
+F1_METRICS = [f1_metric(iou) for iou in F1_IOUS]  # all F1 column base names
+F1_PRIMARY = F1_METRICS[0]  # operating point used to rank models/params ('F1@0.5')
+
+
+def primary_metric_col(columns):
+    """Column that ranks models/params: 'F1@0.5(val)', with fallbacks for suffix-less or legacy AP CSVs."""
+    for col in (mcol(F1_PRIMARY, 'validation'), F1_PRIMARY, mcol('AP20', 'validation'), 'AP20'):
+        if col in columns:
+            return col
+    raise KeyError(f"no object-metric column found among: {list(columns)}")
 
 
 def pred_path(model_path, split):

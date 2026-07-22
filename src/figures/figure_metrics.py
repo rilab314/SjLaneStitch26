@@ -1,22 +1,18 @@
 """Quantitative metrics for figure selection conditions.
 
-Computes trimming/merging/branching/frame AP from LaneStitcher stage results (stage_linestrings)
+Computes trimming/merging/branching/frame F1 from LaneStitcher stage results (stage_linestrings)
 and GT/prediction annotations, used to select only the frames where each figure's intended scene
 actually appears.
 """
-import os
-import sys
-import contextlib
-
 import cv2
 import numpy as np
-from pycocotools import mask as mask_util
 
 import config as cfg
+from evaluator import greedy_match, iou_matrix
 
 CENTER_LINE_ID = 1        # target class for trimming/parallel rejection
 MIN_TRIM_DROP_PX = 15.0   # minimum removed length to judge trimming as "occurred"
-AP20_IOU = 0.20
+F1_IOU = cfg.F1_IOUS[0]   # frame-F1 matching threshold (same operating point as the tables)
 BRANCH_NEIGHBORS = 3      # branch point: at least this many 8-neighbor skeleton pixels
 
 
@@ -64,88 +60,31 @@ def find_branch_points(skeleton):
     return list(zip(ys.tolist(), xs.tolist()))
 
 
-def measure_frame_ap20(gt_anns, pred_anns, image_id, eval_class_ids=None, exclude_ids=None):
-    """COCO AP@IoU0.20 (segm) for one frame. None if there is nothing to evaluate."""
+def measure_frame_f1(gt_anns, pred_anns, eval_class_ids=None, exclude_ids=None):
+    """Frame-level macro F1 at IoU F1_IOU. None if there is nothing to evaluate.
+
+    Same matching rule as the evaluator (evaluate_f1_per_class) restricted to one frame:
+    per class, greedy 1:1 RLE-mask matching at IoU >= F1_IOU, F1 = 2PR/(P+R); macro-averaged
+    over the classes present in the frame's GT or prediction. Returns None when either the
+    GT or the prediction list is empty (callers skip such frames)."""
     eval_class_ids = cfg.EVAL_CLASS_IDS if eval_class_ids is None else eval_class_ids
     exclude_ids = cfg.EXCLUDE_IDS if exclude_ids is None else exclude_ids
     gt_list = [a for a in gt_anns if a.get("category_id") not in exclude_ids]
-    dt_list = [_with_score(a, image_id) for a in pred_anns
-               if a.get("category_id") not in exclude_ids]
+    dt_list = [a for a in pred_anns if a.get("category_id") not in exclude_ids]
     if not gt_list or not dt_list:
         return None
-    gt_dataset = build_frame_dataset(gt_list, image_id, eval_class_ids)
-    return run_segm_ap(gt_dataset, dt_list, image_id, eval_class_ids)
+    f1s = [_class_f1([a for a in dt_list if a.get("category_id") == cid],
+                     [a for a in gt_list if a.get("category_id") == cid])
+           for cid in eval_class_ids]
+    f1s = [v for v in f1s if v is not None]
+    return float(np.mean(f1s)) if f1s else None
 
 
-def _with_score(ann, image_id):
-    """Augments a copy of the prediction annotation with score (default 1.0) and image_id."""
-    out = dict(ann)
-    out.setdefault("score", 1.0)
-    out["image_id"] = image_id
-    return out
-
-
-def build_frame_dataset(gt_list, image_id, eval_class_ids):
-    """Builds a single-image COCO GT dictionary (including the fields loadRes requires)."""
-    height, width = _detect_size(gt_list)
-    annotations = []
-    for index, ann in enumerate(gt_list):
-        annotations.append({
-            "id": index + 1, "image_id": image_id, "category_id": ann["category_id"],
-            "segmentation": ann["segmentation"], "iscrowd": 0,
-            "area": ann.get("area", _ann_area(ann["segmentation"])),
-        })
-    return {
-        "info": {}, "licenses": [],
-        "images": [{"id": image_id, "height": height, "width": width}],
-        "categories": [{"id": int(c), "name": str(c)} for c in eval_class_ids],
-        "annotations": annotations,
-    }
-
-
-def _detect_size(anns, default=(768, 768)):
-    """Extracts (height, width) from the RLE segmentation's size (default if absent)."""
-    for ann in anns:
-        seg = ann.get("segmentation")
-        if isinstance(seg, dict) and "size" in seg:
-            return int(seg["size"][0]), int(seg["size"][1])
-    return default
-
-
-def _ann_area(seg):
-    """Area of an RLE segmentation (0 for polygons, etc.)."""
-    if isinstance(seg, dict):
-        return float(mask_util.area(seg))
-    return 0.0
-
-
-def run_segm_ap(gt_dataset, dt_list, image_id, eval_class_ids):
-    """Computes the mean precision with COCOeval (segm, IoU0.20)."""
-    from pycocotools.coco import COCO
-    from pycocotools.cocoeval import COCOeval
-    with _suppress_stdout():
-        coco_gt = COCO()
-        coco_gt.dataset = gt_dataset
-        coco_gt.createIndex()
-        coco_dt = coco_gt.loadRes(dt_list)
-        evaluation = COCOeval(coco_gt, coco_dt, iouType="segm")
-        evaluation.params.imgIds = [image_id]
-        evaluation.params.catIds = list(eval_class_ids)
-        evaluation.params.iouThrs = np.array([AP20_IOU], dtype=np.float32)
-        evaluation.evaluate()
-        evaluation.accumulate()
-    precision = evaluation.eval["precision"][0, :, :, 0, -1]
-    precision = precision[precision > -1]
-    return float(np.mean(precision)) if precision.size else 0.0
-
-
-@contextlib.contextmanager
-def _suppress_stdout():
-    """Temporarily suppresses console output from COCO creation/evaluation."""
-    with open(os.devnull, "w") as devnull:
-        saved = sys.stdout
-        sys.stdout = devnull
-        try:
-            yield
-        finally:
-            sys.stdout = saved
+def _class_f1(prs, gts):
+    """F1 of one frame and one class (None if the class is absent from both GT and prediction)."""
+    if not gts and not prs:
+        return None
+    matched = len(greedy_match(iou_matrix(prs, gts), F1_IOU))
+    precision = matched / len(prs) if prs else 0.0
+    recall = matched / len(gts) if gts else 0.0
+    return 2 * precision * recall / (precision + recall) if precision + recall else 0.0

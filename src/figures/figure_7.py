@@ -2,12 +2,13 @@
 
 Panels: (a) original | (b) original + GT linestring (endpoint dots) | (c) original + segmentation mask (opaque)
       | (d) original + final vector linestring (endpoint dots) | (e) original + TP (green)/FP (red)/FN (blue) matching.
-Measures per-frame AP20 and mIoU (computed only over valid classes where objects exist), splits into the 4 groups
+Measures per-frame F1@0.5 and mIoU (computed only over valid classes where objects exist), splits into the 4 groups
 below, and saves per folder.
-Filename {coord}_{AP20}_{mIoU}.png (metrics are % x 10 as integers, e.g. AP42.3/mIoU24.5 -> _423_245).
-Groups are matched in listed order (saved to the first matching group):
-  HAP_HIoU: AP20>60 AND mIoU>55 | HAP_LIoU: AP20 > mIoU+25
-  LAP_HIoU: AP20 < mIoU-3       | LAP_LIoU: AP20<30 AND mIoU<30
+Filename {coord}_{F1}_{mIoU}.png (metrics are % x 10 as integers, e.g. F1 42.3/mIoU 24.5 -> _423_245).
+Groups are matched in listed order (saved to the first matching group; thresholds calibrated on the
+validation frame F1@0.5/mIoU distribution -> 239/50/126/237 of 1273 evaluable frames):
+  HF1_HIoU: F1>60 AND mIoU>50 | HF1_LIoU: F1 > mIoU+20
+  LF1_HIoU: F1 < mIoU-10      | LF1_LIoU: F1<25 AND mIoU<30
 """
 import os
 import sys
@@ -27,7 +28,7 @@ from evaluator import to_label_index_image, json_to_label_image
 
 
 class SegVsMergeFigure(FigureGenerator):
-    """Splits into 4 groups (high/low AP x high/low IoU) by frame AP20/mIoU combination and saves them."""
+    """Splits into 4 groups (high/low F1 x high/low IoU) by frame F1@0.5/mIoU combination and saves them."""
 
     name = "Figure_7"
 
@@ -41,29 +42,29 @@ class SegVsMergeFigure(FigureGenerator):
             path, do_merge=True, merge_iters=self._detector.num_merges)
         final = self.final_merge(stage)
         pred_anns = self._detector.convert_to_json(final, image_id)
-        ap20 = fm.measure_frame_ap20(self.gt_annotations(image_id), pred_anns, image_id)
+        f1 = fm.measure_frame_f1(self.gt_annotations(image_id), pred_anns)
         miou = self.frame_miou(image_id, pred_anns)
-        if ap20 is None or miou is None:
+        if f1 is None or miou is None:
             return False
-        group = self._group(ap20 * 100, miou * 100)
+        group = self._group(f1 * 100, miou * 100)
         if group is None:
             return False
         out_dir = os.path.join(self._out_dir, group)
         os.makedirs(out_dir, exist_ok=True)
-        name = f"{image_id}_{round(ap20 * 1000)}_{round(miou * 1000)}.png"
+        name = f"{image_id}_{round(f1 * 1000)}_{round(miou * 1000)}.png"
         cv2.imwrite(os.path.join(out_dir, name), self.compose(stage, final, image_id))
         return True
 
-    def _group(self, ap, miou):
-        """Determines the group from the AP20/mIoU (%) combination (matched in listed order, None if none apply)."""
-        if ap > 60 and miou > 55:
-            return "HAP_HIoU"
-        if ap > miou + 25:
-            return "HAP_LIoU"
-        if ap < miou - 3:
-            return "LAP_HIoU"
-        if ap < 30 and miou < 30:
-            return "LAP_LIoU"
+    def _group(self, f1, miou):
+        """Determines the group from the F1@0.5/mIoU (%) combination (matched in listed order, None if none apply)."""
+        if f1 > 60 and miou > 50:
+            return "HF1_HIoU"
+        if f1 > miou + 20:
+            return "HF1_LIoU"
+        if f1 < miou - 10:
+            return "LF1_HIoU"
+        if f1 < 25 and miou < 30:
+            return "LF1_LIoU"
         return None
 
     def frame_miou(self, image_id, pred_anns):

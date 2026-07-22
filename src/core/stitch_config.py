@@ -11,7 +11,7 @@ import pandas as pd
 
 import config as cfg
 
-DEFAULT_MODEL = "mask2former_large"
+DEFAULT_MODEL = cfg.BEST_MODEL
 
 
 @dataclass
@@ -29,11 +29,11 @@ class StitchConfig:
 
 
 def load_stitch_config(prefer_model=DEFAULT_MODEL):
-    """Read the highest-F1 combination from total_performance.csv and return it as a StitchConfig (defaults if absent)."""
+    """Highest-F1 combination of an own sweep (total_performance.csv), else the published one."""
     csv_path = os.path.join(cfg.RESULT_PATH, "total_performance.csv")
     if os.path.exists(csv_path):
         return build_config_from_csv(csv_path)
-    print(f"[config] {csv_path} not found -> using default parameters ({prefer_model})")
+    print(f"[config] {csv_path} not found -> using the published combination ({prefer_model})")
     return build_default_config(prefer_model)
 
 
@@ -61,11 +61,10 @@ def build_config_from_csv(csv_path):
 
 
 def build_default_config(model_name):
-    """Default combination used when the CSV is absent (same as LaneStitcher defaults)."""
+    """Published combination (config.BEST_PARAMS), used when no sweep CSV is available."""
     model_path = resolve_model_path(model_name)
-    return StitchConfig(model_name, model_path, os.path.join(model_path, "prediction"),
-                        thickness=3, sample_stride=10, extend_len=20,
-                        turn_penalty=3.0, merge_count=3)
+    return StitchConfig(model_name, model_path, cfg.pred_path(model_path, "validation"),
+                        **cfg.BEST_PARAMS)
 
 
 def resolve_model_path(model_name):

@@ -1,34 +1,39 @@
 import os
 
-DATA_ROOT = "/media/humpback/435806fd-079f-4ba1-ad80-109c8f6e2ec0/Ongoing/2026_LaneDetector/LaneDetector_on"
+DATA_ROOT = "/path/to/2026_LaneStitch_deploy"
 
 # ────────────────────────────────────────────────────────────────────── #
-# Built dataset (the single authoritative source for every downstream script).
-# Both folders are produced from the raw SEED source (SRC_* below) by
-# dataprep/build_dataset.py and hold a complete train/validation/test dataset.
+# Datasets (the single authoritative GT for every downstream script).
 #   ade20k/ : ADE20K semantic-segmentation format
 #       images/{training,validation,test}/*.png            satellite images
 #       annotations/{training,validation,test}/*.png       index labels (mIoU GT, pixel = class_id + 1)
 #       color_annotations/{training,validation,test}/*.png color visualization labels
 #   coco/   : COCO instance-segmentation format
-#       annotations/instances_{train,validation,test}2017.json  merged lane GT (object F1)
-#       {train2017,val2017,test2017}/*.png                       satellite images
+#       annotations/instances_{train,validation,test}2017.json  lane instance GT (object F1)
 # ────────────────────────────────────────────────────────────────────── #
 DATASET_PATH = DATA_ROOT + "/ade20k"   # ADE20K semantic-seg dataset
 COCO_PATH = DATA_ROOT + "/coco"        # COCO instance-seg dataset
 
 # Folder name for outputs (prediction JSON, CSV, Figure, Table). Change it per run to keep results separate.
-RESULT_DIR = "results_260710"
+RESULT_DIR = "results"
 RESULT_PATH = os.path.join(DATA_ROOT, RESULT_DIR)
 
 # ────────────────────────────────────────────────────────────────────── #
-# Raw SEED source. **Only dataprep/build_dataset.py reads this** to build the
-# ade20k/coco datasets above; no other script touches it.
-#   image/        : satellite images {basename}.png across all splits (train+val+test = 12828)
+# SEED vector source. **Only dataprep/build_dataset.py and dataprep/merge_annotation.py read
+# this**; no other script touches it.
 #   label/        : SEED vector labels {basename}.json across all splits
 #   dataset.json  : basename list per split (train/validation/test)
+#   image/        : satellite images {basename}.png across all splits, when the release ships
+#                   them; otherwise the build falls back to the images in ade20k/images.
+#
+# SEED_MAP_v1.1 holds one polyline per lane and is the revision build_dataset.py converts, so
+# the build is a pure format conversion. It is produced from the raw SEED release
+# (SEED_MAP_v1.0, fragmented polylines) by dataprep/merge_annotation.py — see RAW_SEED_PATH.
 # ────────────────────────────────────────────────────────────────────── #
-SRC_DATASET_PATH = os.path.join(DATA_ROOT, "satellite_good_matching_250206")
+SEED_SOURCE_PATH = os.path.join(DATA_ROOT, "SEED_MAP_v1.1")  # merged SEED revision (build input)
+RAW_SEED_PATH = os.path.join(DATA_ROOT, "SEED_MAP_v1.0")     # raw release (merge_annotation input)
+
+SRC_DATASET_PATH = SEED_SOURCE_PATH
 SRC_IMAGE_DIR = os.path.join(SRC_DATASET_PATH, "image")
 SRC_LABEL_DIR = os.path.join(SRC_DATASET_PATH, "label")
 DATASET_SPLIT_JSON = os.path.join(SRC_DATASET_PATH, "dataset.json")
@@ -122,11 +127,6 @@ def coco_image_dir(split):
     return os.path.join(COCO_PATH, COCO_IMG_DIR[split])
 
 
-def merge_compare_dir(split):
-    """Directory for saving merge_annotation before/after comparison images (per split)."""
-    return os.path.join(RESULT_PATH, "merge_compare", split)
-
-
 def split_result_path(split):
     """Algorithm result root. val/test are not split by path; they use the same RESULT_PATH.
     The two splits are distinguished only by filename (coco_pred_val_*/coco_pred_test_*) and CSV
@@ -178,6 +178,11 @@ RENDER_METAINFO = [
 RENDER_ID2BGR = {c['id']: (c['color'][2], c['color'][1], c['color'][0]) for c in RENDER_METAINFO}
 MODEL_PREFIX = "satellite_ade20k_250925_"
 
-# merge_annotation.py only: merges the separated SEED lane labels to build the COCO GT.
-# The image/label/split lists reuse the original dataset (SRC_*) paths above as is.
-SEED_LABEL_PATH = SRC_LABEL_DIR
+# ────────────────────────────────────────────────────────────────────── #
+# Published combination: the model and stitching hyperparameters selected on the validation
+# split (highest F1@0.5) and reported in the paper. Used whenever no total_performance.csv of
+# an own sweep is available, so a fresh checkout reproduces the published run directly.
+# ────────────────────────────────────────────────────────────────────── #
+BEST_MODEL = "mask2former_large"
+BEST_PARAMS = {'thickness': 3, 'sample_stride': 5, 'extend_len': 20,
+               'turn_penalty': 5.0, 'merge_count': 3}

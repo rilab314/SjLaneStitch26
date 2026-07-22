@@ -22,7 +22,6 @@ With these rules, the val labels reproduce the existing ade20k labels and test i
 import os
 import sys
 import json
-import glob
 
 import cv2
 import numpy as np
@@ -33,6 +32,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import _bootstrap  # noqa: F401  # registers core/tables/figures on sys.path
 
 import config as cfg
+import seed_label
 
 
 class SegLabelRasterizer:
@@ -43,18 +43,19 @@ class SegLabelRasterizer:
     # A smaller priority number is drawn on top (wins on overlap). ignore(0) is not drawn.
     CLASS_PRIORITY = {1: 10, 2: 6, 3: 7, 4: 3, 5: 8, 6: 4, 7: 5, 8: 9, 9: 0, 10: 1, 11: 2}
 
-    def __init__(self, split: str, image_ids, out_dir: str):
+    def __init__(self, split: str, image_ids, out_dir: str, label_dir: str, image_dir: str):
         self._split = split
         self._image_ids = image_ids
         self._out_dir = out_dir
-        self._name2id = {c['name']: c['id'] for c in cfg.METAINFO}
+        self._label_dir = label_dir
+        self._image_dir = image_dir
         os.makedirs(out_dir, exist_ok=True)
 
     def run(self):
         made = 0
         skipped = 0
         for base in tqdm(self._image_ids, desc=f'seg-label[{self._split}]'):
-            seed = os.path.join(cfg.SRC_LABEL_DIR, base + '.json')
+            seed = os.path.join(self._label_dir, base + '.json')
             if not os.path.exists(seed):
                 skipped += 1
                 continue
@@ -64,7 +65,7 @@ class SegLabelRasterizer:
         print(f'[seg-label] split={self._split}: created {made}, skipped {skipped} -> {self._out_dir}')
 
     def _image_size(self, base: str):
-        img_file = os.path.join(cfg.SRC_IMAGE_DIR, base + '.png')
+        img_file = os.path.join(self._image_dir, base + '.png')
         img = cv2.imread(img_file)
         if img is None:
             return self.default_size, self.default_size
@@ -73,13 +74,13 @@ class SegLabelRasterizer:
     def _rasterize(self, seed_json: str, hw) -> np.ndarray:
         h, w = hw
         label = np.ones((h, w), dtype=np.uint8)  # background/road = 1
-        objs = self._load_line_objects(seed_json)
+        lanes = seed_label.load_lane_objects(seed_json)
         # Draw classes with larger priority first so that classes with smaller (=higher) priority remain on top
         # (same overlap-resolution rule as the original ADE20K generator).
-        objs.sort(key=lambda o: self.CLASS_PRIORITY.get(o[0], 0), reverse=True)
-        for cid, pts in objs:
-            for polygon in self._line_to_polygons(pts):
-                cv2.fillPoly(label, [polygon], cid + 1)
+        lanes.sort(key=lambda lane: self.CLASS_PRIORITY.get(lane.category_id, 0), reverse=True)
+        for lane in lanes:
+            for polygon in self._line_to_polygons(lane.points):
+                cv2.fillPoly(label, [polygon], lane.category_id + 1)
         return label
 
     def _line_to_polygons(self, pts: np.ndarray):
@@ -95,24 +96,6 @@ class SegLabelRasterizer:
             polygons.append(np.array(ext, dtype=np.int32))
         return polygons
 
-    def _load_line_objects(self, seed_json: str):
-        """Load a list of (class id, point array) from SEED json.
-        Use only RoadObject / LINE_STRING / points>=2 / METAINFO categories."""
-        with open(seed_json, 'r') as f:
-            data = json.load(f)
-        objs = []
-        for o in data:
-            if o.get('class') != 'RoadObject' or o.get('geometry_type') != 'LINE_STRING':
-                continue
-            pts = o.get('image_points')
-            if not pts or len(pts) < 2:
-                continue
-            cat = o.get('category')
-            if cat not in self._name2id:
-                continue
-            objs.append((self._name2id[cat], np.array(pts, dtype=np.float64)))
-        return objs
-
 
 def main():
     with open(cfg.DATASET_SPLIT_JSON, 'r') as f:
@@ -123,6 +106,8 @@ def main():
             split=split,
             image_ids=sorted(dataset[split]),
             out_dir=cfg.label_dir(split),
+            label_dir=cfg.SRC_LABEL_DIR,
+            image_dir=cfg.SRC_IMAGE_DIR,
         )
         rasterizer.run()
 

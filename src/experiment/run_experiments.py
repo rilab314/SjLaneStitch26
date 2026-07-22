@@ -12,7 +12,7 @@ from lane_stitcher import LaneStitcher
 from evaluator import evaluate_all, evaluate_f1, _filename_to_merge_count, _order_eval_columns
 
 
-BEST_MODEL = 'mask2former_large'   # Swin-L backbone, best F1 model. Only this model gets the full parameter sweep
+BEST_MODEL = cfg.BEST_MODEL   # Swin-L backbone, best F1 model. Only this model gets the full parameter sweep
 
 
 def run_experiments(splits, visualize=True):

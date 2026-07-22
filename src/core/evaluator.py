@@ -2,7 +2,7 @@ import os
 import glob
 import json
 import sys
-from typing import Dict, Any
+from typing import Dict, Any, List
 
 import cv2
 import numpy as np
@@ -125,15 +125,16 @@ def evaluate_segm_pred_metrics(model_path: str, label_path: str, split: str = 'v
     """Compute the mIoU and per-class IoU of the pure segmentation prediction (uses a per-split metrics cache).
 
     Prediction masks are read from <model_path>/pred_val|pred_test, and GT labels from label_path (per split).
-    The cache is stored in a per-split metrics_{split}.json."""
+    The cache is stored in a per-split metrics_{split}.json and is invalidated whenever a GT
+    label is newer than the cache (e.g. after rebuilding the dataset from another SEED revision)."""
     metrics_json = os.path.join(model_path, f"metrics_{split}.json")
-    if os.path.exists(metrics_json):
+    pred_dir = cfg.pred_path(model_path, split)
+    files = glob.glob(os.path.join(label_path, "*.png"))
+    if _is_cache_fresh(metrics_json, files):
         data = load_json(metrics_json)
         if "per_class_iou" in data:  # recompute old-version caches that lack per-class IoU
             return data
 
-    pred_dir = cfg.pred_path(model_path, split)
-    files = glob.glob(os.path.join(label_path, "*.png"))
     intersections = {cid: 0 for cid in cfg.EVAL_CLASS_IDS}
     unions = {cid: 0 for cid in cfg.EVAL_CLASS_IDS}
     for file in tqdm(files, desc=f"Segm IoU[{split}]"):
@@ -153,6 +154,14 @@ def evaluate_segm_pred_metrics(model_path: str, label_path: str, split: str = 'v
     with open(metrics_json, 'w') as f:
         json.dump(res, f)
     return res
+
+
+def _is_cache_fresh(cache_path: str, source_files: List[str]) -> bool:
+    """True when the cache exists and is newer than every source file it was computed from."""
+    if not os.path.exists(cache_path) or not source_files:
+        return False
+    cached_at = os.path.getmtime(cache_path)
+    return all(os.path.getmtime(f) <= cached_at for f in source_files)
 
 
 def evaluate_f1(gt_json: str, pred_json: str) -> Dict[str, Any]:

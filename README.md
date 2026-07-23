@@ -4,7 +4,7 @@ Reference implementation for the paper:
 
 > **Vectorized Lane Marking Detection and Refinement From Satellite Imagery for HD Maps**
 > Seongjun Youn, Hae Min Cho, Hyukdoo Choi
-> *Submitted to IEEE Access — currently under review.*
+> *Currently under review.*
 
 > ⚠️ **Status:** The manuscript is under peer review. Details (numbers, class set,
 > parameters) may still change with revisions. This repository is tagged **v1**,

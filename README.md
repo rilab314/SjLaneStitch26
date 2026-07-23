@@ -54,15 +54,7 @@ i.e. it restores object continuity without sacrificing coverage.
 - **Pixel-level mIoU** — mean IoU over class pixels, measuring how much of the marked area is
   covered (independent of how pixels group into objects).
 
-### Dataset — SEED-MAP
-
-12,828 satellite images at 768×768 (8,979 train / 1,282 validation / 2,567 test) with
-eleven lane marking classes. Nine are evaluated (`guiding_line` and `safety_zone` are
-excluded, as they don't admit a clean linestring representation). Annotations are
-consolidated (duplicates collapsed, fragments chained) before evaluation.
-
-The dataset is released separately:
-<https://github.com/rilab314/SatelliteLaneDataset2024>.
+The dataset and how to obtain it are described in §2 (Dataset & data bundle).
 
 ---
 
@@ -110,11 +102,19 @@ src/
 InternImage/           # InternImage segmentation model tree (incl. ops_dcnv3 CUDA op)
 ```
 
-### Data bundle
+### Dataset & data bundle
 
-Everything the pipeline reads and writes lives under one folder, published as
-**`2026_LaneStitch_deploy.zip`** (link: _to be added_). Unpack it and point
-`config.DATA_ROOT` at it:
+The dataset — **SEED-MAP** — is 12,828 satellite images at 768×768 (8,979 train /
+1,282 validation / 2,567 test) with eleven lane marking classes. Nine are evaluated
+(`guiding_line` and `safety_zone` are excluded, as they don't admit a clean linestring
+representation). Annotations are consolidated (duplicates collapsed, fragments chained)
+before evaluation. The raw dataset is released separately at
+<https://github.com/rilab314/SatelliteLaneDataset2024>.
+
+For reproducing this paper, everything the pipeline reads and writes lives under one
+folder, published as **`2026_LaneStitch_deploy.zip`**
+([download](https://1drv.ms/u/c/f3539410ca672e92/IQBqRJCvBWj3Spdz6dt4qSBlAeWIO6KybeN_EDRcapP9LbY?e=Kz1iIs)).
+Unpack it and point `config.DATA_ROOT` at it:
 
 ```
 DATA_ROOT/
@@ -133,6 +133,14 @@ DATA_ROOT/
   Internimage/  mask2former/        <model>/{pred_val,pred_test}/*.png + checkpoint/
   results/                          RESULT_DIR — prediction JSON, CSV, Tables, Figures
 ```
+
+The archive holds five top-level folders (~35 GB unpacked):
+
+- **`ade20k/`** — satellite images + semantic-seg GT (index labels for mIoU, plus color labels).
+- **`coco/`** — COCO instance-seg GT (JSON only) for object-level F1; images come from `ade20k/images`.
+- **`SEED_MAP_v1.1/`** — the merged SEED vector source both datasets are built from.
+- **`Internimage/`, `mask2former/`** — per-model segmentation predictions (`pred_val`/`pred_test`) and checkpoints.
+- **`results/`** — output folder for prediction JSON, CSVs, Tables, and Figures.
 
 Both datasets are shipped ready to use, so **nothing has to be built to reproduce the
 results**. They are derived from the SEED vector source: `dataprep/build_dataset.py`

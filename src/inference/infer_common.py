@@ -1,15 +1,15 @@
 """
 Common utilities for segmentation inference (infer_common)
 
-Parts shared by the InternImage (env: internimage, mmseg 0.x) and Mask2Former (env: mmseg, mmseg 1.x)
-inference scripts:
+Parts shared by the InternImage (.venv-internimage, mmseg 0.x) and Mask2Former (.venv-mask2former,
+mmseg 1.x) inference scripts — see README §3.2 / §3.3:
   - per-split list of original images (dataset.json split lists + built ade20k images)
   - model class index map -> pure class-color mask (BGR) conversion (lane_stitcher input format)
   - iterate over splits and save to <model>/pred_val, <model>/pred_test
-  - validate the color mapping against the existing prediction/ folder (the original val inference results)
+  - validate the color mapping against the existing pred_val/ folder (the original val inference results)
 
 Color mapping note: for the class index i the model outputs, METAINFO id = i + class_offset.
-In the existing predictions (prediction/*.png) the background is black (id 0), so offset=0 is the default for both models.
+In the existing predictions (pred_val/*.png) the background is black (id 0), so offset=0 is the default for both models.
 If unsure for a new model/config, first confirm with validate_against_existing that it reproduces the existing val
 predictions, then trust the test predictions.
 """
@@ -70,8 +70,8 @@ def run_inference(infer_fn, model_out_dir, splits=None, class_offset=0, overwrit
 
 
 def validate_against_existing(infer_fn, model_out_dir, class_offset=0, split='validation',
-                              n=20, existing_dirname='prediction'):
-    """Validate via pixel agreement whether the inference results reproduce the existing val predictions (<model>/prediction/*.png).
+                              n=20, existing_dirname='pred_val'):
+    """Validate via pixel agreement whether the inference results reproduce the existing val predictions (<model>/pred_val/*.png).
 
     Used to confirm that the color index mapping (class_offset) and preprocessing pipeline match the original.
     An agreement close to 1.0 means the mapping is correct."""

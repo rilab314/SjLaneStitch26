@@ -1,25 +1,24 @@
 """
 InternImage segmentation inference -> generate pure class-color masks (infer_internimage)
 
-Run environment (conda): internimage  (torch 1.11+cu113, mmcv-full 1.5.0, mmseg 0.27.0, DCNv3)
+Run environment: the InternImage inference venv (see README §3.2 / requirements-internimage.txt)
+  — torch 1.11+cu113, mmcv-full 1.5.0, mmseg 0.27.0, plus the compiled DCNv3 CUDA op.
 Prerequisites:
-  - The InternImage/segmentation/ops_dcnv3 folder is required. It is missing from this repo, so
-    copy it from a built rilab repo (once):
-      cp -r /media/.../2025_LaneDetector_rilab/InternImage/segmentation/ops_dcnv3 \
-            <project>/InternImage/segmentation/
+  - Build the DCNv3 operator once (sources are in this repo):
+      cd InternImage/segmentation/ops_dcnv3 && sh make.sh
   - The config (.py) and best checkpoint are under CKPT_ROOT below.
 
-Usage:
+Usage (with .venv-internimage activated):
   cd src
-  conda run -n internimage python infer_internimage.py                 # val+test inference
-  conda run -n internimage python infer_internimage.py --validate      # validate reproduction of existing val predictions
-  conda run -n internimage python infer_internimage.py --splits test   # test only
+  python inference/infer_internimage.py                 # val+test inference
+  python inference/infer_internimage.py --validate      # validate reproduction of existing val predictions
+  python inference/infer_internimage.py --splits test   # test only
 
 Output: <DATA_ROOT>/Internimage/satellite_ade20k_250925_internimage_large/{pred_val,pred_test}/*.png
 
 The InternImage config uses num_classes=12, reduce_zero_label=False + the ADE20K label id+1 rule, so
 the model class = METAINFO id + 1. Therefore apply offset=-1 when colorizing
-(CLASS_OFFSET=-1; confirmed to exactly reproduce the existing prediction/ predictions).
+(CLASS_OFFSET=-1; confirmed to exactly reproduce the existing pred_val/ predictions).
 """
 
 import os

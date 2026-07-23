@@ -2,14 +2,12 @@ import os
 import glob
 import json
 import sys
-from typing import Dict, Any
+from typing import Dict, Any, List
 
 import cv2
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
-from pycocotools.coco import COCO
-from pycocotools.cocoeval import COCOeval
 from pycocotools import mask as maskUtils
 
 _SRC = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -19,16 +17,13 @@ import _bootstrap  # noqa: F401  # registers core/tables/figures on sys.path
 import config as cfg
 
 
-IOUs=[0.10, 0.20, 0.50]
-
-
 def main():
     """Smoke test for the evaluator -- this is NOT the real pipeline entry point.
 
     The real evaluation runs inside experiment/run_experiments.py, which calls
     evaluate_all() for each parameter folder. This test only re-evaluates the best
     config's existing validation predictions (coco_pred_val_*.json under the best
-    parameter folder) to confirm evaluate_all / evaluate_coco_ap / evaluate_miou_json
+    parameter folder) to confirm evaluate_all / evaluate_f1 / evaluate_miou_json
     still work end to end.
     """
     from util import find_best_pred_json_path, find_model_path
@@ -58,7 +53,7 @@ def evaluate_all(coco_gt_json, label_path, model_path, result_path, split='valid
     for json_file in json_files:
         merge_count = _filename_to_merge_count(json_file)
         result = {"merge_count": merge_count}
-        result.update(_suffix(evaluate_coco_ap(coco_gt_json, json_file), label))
+        result.update(_suffix(evaluate_f1(coco_gt_json, json_file), label))
         result.update(_suffix(evaluate_miou_json(json_file, label_path), label))
         results.append(result)
 
@@ -71,13 +66,13 @@ def evaluate_all(coco_gt_json, label_path, model_path, result_path, split='valid
 
 
 def _suffix(metrics: Dict[str, Any], label: str) -> Dict[str, Any]:
-    """Append a (label) suffix to each key of the metrics dict. e.g. AP20 -> AP20(val)."""
+    """Append a (label) suffix to each key of the metrics dict. e.g. F1@0.5 -> F1@0.5(val)."""
     return {f"{k}({label})": v for k, v in metrics.items()}
 
 
 def _order_eval_columns(df: pd.DataFrame) -> pd.DataFrame:
     """After merge_count, order the metric columns by split (val->test) and then by metric."""
-    metrics = ["instances", "AP10", "AP20", "AP50", "mIoU"]
+    metrics = ["instances", *cfg.F1_METRICS, "mIoU"]
     ordered = ["merge_count"]
     for lbl in ("val", "test"):
         for m in metrics:
@@ -130,15 +125,16 @@ def evaluate_segm_pred_metrics(model_path: str, label_path: str, split: str = 'v
     """Compute the mIoU and per-class IoU of the pure segmentation prediction (uses a per-split metrics cache).
 
     Prediction masks are read from <model_path>/pred_val|pred_test, and GT labels from label_path (per split).
-    The cache is stored in a per-split metrics_{split}.json."""
+    The cache is stored in a per-split metrics_{split}.json and is invalidated whenever a GT
+    label is newer than the cache (e.g. after rebuilding the dataset from another SEED revision)."""
     metrics_json = os.path.join(model_path, f"metrics_{split}.json")
-    if os.path.exists(metrics_json):
+    pred_dir = cfg.pred_path(model_path, split)
+    files = glob.glob(os.path.join(label_path, "*.png"))
+    if _is_cache_fresh(metrics_json, files):
         data = load_json(metrics_json)
         if "per_class_iou" in data:  # recompute old-version caches that lack per-class IoU
             return data
 
-    pred_dir = cfg.pred_path(model_path, split)
-    files = glob.glob(os.path.join(label_path, "*.png"))
     intersections = {cid: 0 for cid in cfg.EVAL_CLASS_IDS}
     unions = {cid: 0 for cid in cfg.EVAL_CLASS_IDS}
     for file in tqdm(files, desc=f"Segm IoU[{split}]"):
@@ -160,27 +156,98 @@ def evaluate_segm_pred_metrics(model_path: str, label_path: str, split: str = 'v
     return res
 
 
-def evaluate_coco_ap(gt_json: str, pred_json: str):
-    print(f"===== [evaluate_coco_ap] pred_json: {pred_json}")
-    selected_gt_path = _get_selected_annotation(gt_json)
-    coco_gt = COCO(selected_gt_path)
-    dt_data = load_json(pred_json)
-    if isinstance(dt_data, list):
-        dt_data = [d for d in dt_data if d.get('category_id') not in cfg.EXCLUDE_IDS]
-    coco_dt = coco_gt.loadRes(dt_data)
-    coco_eval = COCOeval(coco_gt, coco_dt, iouType='segm')
-    coco_eval.params.catIds = cfg.EVAL_CLASS_IDS
-    coco_eval.params.iouThrs = np.array(IOUs, dtype=np.float32)
-    coco_eval.evaluate()
-    coco_eval.accumulate()
+def _is_cache_fresh(cache_path: str, source_files: List[str]) -> bool:
+    """True when the cache exists and is newer than every source file it was computed from."""
+    if not os.path.exists(cache_path) or not source_files:
+        return False
+    cached_at = os.path.getmtime(cache_path)
+    return all(os.path.getmtime(f) <= cached_at for f in source_files)
 
-    res = {"instances": str(len(coco_dt.getAnnIds()))}
-    for i, iou in enumerate(IOUs):
-        p = coco_eval.eval['precision'][i, :, :, 0, -1]
-        p = p[p > -1]
-        res[f"AP{int(iou*100)}"] = float(np.mean(p)) if p.size else 0.0
-    print(f"===== [evaluate_coco_ap] res: {res}")
+
+def evaluate_f1(gt_json: str, pred_json: str) -> Dict[str, Any]:
+    """Object metric for eval_result.csv: prediction count + macro-averaged F1 per cfg.F1_IOUS threshold."""
+    print(f"===== [evaluate_f1] pred_json: {pred_json}")
+    per_class = evaluate_f1_per_class(gt_json, pred_json)
+    res = {"instances": str(sum(c["n_pred"] for c in per_class.values()))}
+    for iou in cfg.F1_IOUS:
+        key = cfg.f1_metric(iou)
+        res[key] = float(np.mean([c[key] for c in per_class.values()]))
+    print(f"===== [evaluate_f1] res: {res}")
     return res
+
+
+def evaluate_f1_per_class(gt_json: str, pred_json: str) -> Dict[int, Dict[str, float]]:
+    """Dataset-level per-class object F1 at each cfg.F1_IOUS threshold.
+
+    Predictions and GT of the same image and class are greedily 1:1-matched at the lowest
+    threshold; a match also counts at a higher threshold when its IoU clears it (with the
+    descending-IoU greedy order this equals matching each threshold separately).
+    Per class over the whole split: precision = matched/n_pred, recall = matched/n_gt,
+    F1 = 2PR/(P+R). Returns {class_id: {n_gt, n_pred, 'F1@0.5': ..}}."""
+    gt_idx = group_anns_by_image_class(load_json(_get_selected_annotation(gt_json))["annotations"])
+    data = load_json(pred_json)
+    pred_idx = group_anns_by_image_class(data["annotations"] if isinstance(data, dict) else data)
+    counts = {cid: {"n_gt": 0, "n_pred": 0, "matched": {iou: 0 for iou in cfg.F1_IOUS}}
+              for cid in cfg.EVAL_CLASS_IDS}
+    for img_id in tqdm(set(gt_idx) | set(pred_idx), desc="F1 matching"):
+        for cid in cfg.EVAL_CLASS_IDS:
+            _count_matches(counts[cid], gt_idx.get(img_id, {}).get(cid, []),
+                           pred_idx.get(img_id, {}).get(cid, []))
+    return {cid: _f1_from_counts(c) for cid, c in counts.items()}
+
+
+def _count_matches(count, gts, prs):
+    count["n_gt"] += len(gts)
+    count["n_pred"] += len(prs)
+    for matched_iou in greedy_match(iou_matrix(prs, gts), min(cfg.F1_IOUS)):
+        for iou in cfg.F1_IOUS:
+            count["matched"][iou] += int(matched_iou >= iou)
+
+
+def _f1_from_counts(count):
+    res = {"n_gt": count["n_gt"], "n_pred": count["n_pred"]}
+    for iou in cfg.F1_IOUS:
+        precision = count["matched"][iou] / count["n_pred"] if count["n_pred"] else 0.0
+        recall = count["matched"][iou] / count["n_gt"] if count["n_gt"] else 0.0
+        res[cfg.f1_metric(iou)] = (2 * precision * recall / (precision + recall)
+                                   if precision + recall else 0.0)
+    return res
+
+
+def group_anns_by_image_class(anns) -> Dict[str, Dict[int, list]]:
+    """Group COCO annotations as {image_id: {category_id: [ann, ...]}}, dropping EXCLUDE_IDS."""
+    idx = {}
+    for a in anns:
+        cid = int(a.get("category_id", 0))
+        if cid in cfg.EXCLUDE_IDS:
+            continue
+        idx.setdefault(str(a.get("image_id")), {}).setdefault(cid, []).append(a)
+    return idx
+
+
+def iou_matrix(prs, gts) -> np.ndarray:
+    """Pairwise mask-IoU matrix (n_pred x n_gt) between COCO annotations of one image/class."""
+    if not prs or not gts:
+        return np.zeros((len(prs), len(gts)), dtype=np.float64)
+    segs_p = [p["segmentation"] for p in prs]
+    segs_g = [g["segmentation"] for g in gts]
+    return np.asarray(maskUtils.iou(segs_p, segs_g, [0] * len(gts)),
+                      dtype=np.float64).reshape(len(prs), len(gts))
+
+
+def greedy_match(iou, thr):
+    """Greedily 1:1-match pairs with IoU>=thr in descending-IoU order; return the matched IoUs."""
+    nP, nG = iou.shape
+    pairs = sorted(((iou[i, j], i, j) for i in range(nP) for j in range(nG)
+                    if iou[i, j] >= thr), reverse=True)
+    used_p, used_g, ious = set(), set(), []
+    for v, i, j in pairs:
+        if i in used_p or j in used_g:
+            continue
+        used_p.add(i)
+        used_g.add(j)
+        ious.append(v)
+    return ious
 
 
 def _get_selected_annotation(gt_json: str) -> str:

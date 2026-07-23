@@ -15,7 +15,7 @@
 1. InternImage/Mask2Former 세그멘테이션 모델의 예측 결과와 ADE20K 형식의 GT를 입력으로 받음
 2. 세그멘테이션 블롭을 Zhang-Suen 세선화(thinning)를 통해 `Strand`(폴리라인) 인스턴스로 변환
 3. 끝점 겹침 감지를 통해 단편화된 선을 병합(stitch)
-4. COCO AP(IoU 임계값 0.10, 0.20, 0.50)와 픽셀 단위 mIoU로 성능 평가
+4. 객체 단위 F1(그리디 IoU 매칭, IoU 0.5)과 픽셀 단위 mIoU로 성능 평가
 5. 논문 작성을 위한 CSV 테이블 및 시각화 그림(Figure) 생성
 
 ### 용어 정리 (line/lane 혼동 방지)
@@ -23,22 +23,25 @@
 - **polyline / `Strand`**: 그 차선의 기하 표현(순서 있는 점열) — 자료구조 관점.
   세그멘테이션에서 추출돼 stitch될 "가닥". `LaneStitcher`가 다루는 단위.
 - **`LaneStitcher`**: 세그멘테이션 → lane 벡터화·병합 파이프라인 클래스 (`core/lane_stitcher.py`)
-- **`MergeAnnotator`**: GT 어노테이션 통합 파이프라인 (`dataprep/merge_annotation.py`)
+- **`LaneMerger`**: GT 어노테이션 통합 기하 엔진 (`dataprep/lane_merger.py`).
+  실행 스크립트는 `dataprep/merge_annotation.py`(SEED v1.0 → v1.1)
 - 공유 기하/병합 연산은 각 파이프라인 파일(`core/lane_stitcher.py`, `dataprep/merge_annotation.py`) 안에 포함되어 있다
 
 ---
 
 ## 실행 방법
 
-`src/`는 종류별 하위 폴더로 정리되어 있다. 직접 실행하는 스크립트 목록·순서의 상세는
-`src/README.md`(영문)를 참고한다. 모든 명령은 `src/`에서 실행한다.
+`src/`는 종류별 하위 폴더로 정리되어 있다. 프로젝트 개요·데이터 준비·패키지 설치·직접 실행하는
+스크립트 목록·순서의 상세는 저장소 루트의 `README.md`(영문)를 참고한다. 모든 명령은 `src/`에서 실행한다.
 
 폴더 구조 요약:
 - `core/` — 공유 라이브러리(직접 실행 X): `lane_stitcher.py`, `evaluator.py`,
   `stitch_config.py`, `util.py`, `show_imgs.py`
   (`evaluator.py`·`lane_stitcher.py`의 `main()`은 실제 실행용이 아니라 동작 확인용 스모크 테스트다)
-- `dataprep/` — 데이터셋 빌드: `build_dataset.py`(메인, SEED 원본 → `ade20k/`+`coco/` 전체 split),
-  `make_seg_labels.py`(ADE20K 인덱스 라벨 생성 라이브러리/부분 재생성), `merge_annotation.py`(COCO 병합 GT 라이브러리/부분 재생성)
+- `dataprep/` — 데이터셋 빌드: `merge_annotation.py`(SEED v1.0 → 병합된 v1.1 소스 생성, 단독 실행),
+  `build_dataset.py`(메인, SEED v1.1 → `ade20k/`+`coco/` 전체 split, **형식 변환만**),
+  `make_seg_labels.py`(ADE20K 인덱스 라벨 래스터라이저), `seed_to_coco.py`(COCO 인스턴스 GT 변환),
+  `lane_merger.py`(폴리라인 병합 기하 엔진), `seed_label.py`(SEED json 공통 리더)
 - `inference/` — 세그멘테이션 추론 → 모델별 `pred_val`/`pred_test` (입력 이미지는 `ade20k/images/<split>`)
 - `experiment/` — 파이프라인 실행·평가 (`run_experiments.py`, `run_parallel_sweep.py`(병렬 재현),
   `run_best_experiment.py`)
@@ -46,15 +49,27 @@
 - `figures/` — 논문 Figure 1~8 (`figure_1.py`~`figure_8.py`, 공통 렌더 헬퍼 `figure_*.py`)
 - `import` 경로는 `_bootstrap.py`가 `core/`·`tables/`·`figures/`를 sys.path에 등록해 유지된다.
 
-데이터 중복 없음: 모든 GT(인덱스 라벨·컬러 라벨·COCO 병합 GT)는 `ade20k/`·`coco/`에 한 벌만 존재하고,
-모든 스크립트가 `config`의 `image_dir/label_dir/color_label_dir/coco_anno_path` 헬퍼로 그 한 벌을 참조한다.
-원본 SEED(`satellite_good_matching_250206`)는 `build_dataset.py`만 읽는다.
+데이터 중복 없음: 모든 GT(인덱스 라벨·컬러 라벨·COCO 인스턴스 GT)는 `ade20k/`·`coco/`에 한 벌만
+존재하고, 모든 스크립트가 `config`의 `image_dir/label_dir/color_label_dir/coco_anno_path` 헬퍼로
+그 한 벌을 참조한다. 배포 번들(`2026_LaneStitch_deploy.zip`)에 두 데이터셋이 모두 들어 있으므로
+재현에는 빌드가 필요 없다. 자세한 설명은 `DATA_ROOT/README.md`.
+
+**SEED 소스 2개 버전**:
+- `SEED_MAP_v1.0` — 원본. 한 차선이 여러 폴리라인으로 조각나 있음. `merge_annotation.py`만 읽으며
+  배포 번들에는 포함되지 않는다.
+- `SEED_MAP_v1.1` — 조각난 폴리라인을 병합한 소스(형식은 v1.0과 동일). `build_dataset.py`가 읽는다.
+  병합이 소스 단계로 올라갔기 때문에 빌드는 **형식 변환만** 한다. 번들의 `ade20k/`는 v1.0 기준으로
+  만들어졌으므로 v1.1로 다시 빌드하면 라벨이 조금 달라진다(COCO는 바이트 동일).
 
 ```bash
 cd src
 
-# 1. 데이터셋 빌드 (SEED 원본 → ade20k/ + coco/, 최초 1회. train/val/test 전체)
-python dataprep/build_dataset.py                     # 옵션: --split validation test / --skip images
+# 0. (선택) SEED v1.1 생성 — 원본 v1.0 릴리스가 바뀔 때만 필요
+python dataprep/merge_annotation.py --src <v1.0 경로> --dst <v1.1 경로> --jobs 14
+#    옵션: --split validation test / --count-only / --compare-dir <비교 이미지 폴더>
+
+# 1. (선택) 데이터셋 빌드 (SEED v1.1 → ade20k/ + coco/. 번들에 이미 포함돼 있음)
+python dataprep/build_dataset.py                     # 옵션: --split validation test / --skip images / --coco-images
 
 # 2. 세그멘테이션 추론 → <model>/pred_val, <model>/pred_test (ade20k/images 입력)
 python inference/infer_internimage.py
@@ -72,7 +87,7 @@ python tables/num_params.py              # 모델별 파라미터 수 (Table 1 P
 python tables/table_1.py                 # 모델 비교 (segmentation vs merge×1), val·test
 python tables/table_2.py                 # best 모델 클래스별 성능
 python tables/table_3.py                 # best 모델 클래스별 진단 분해
-python tables/table_4.py                 # 단계별 향상 (first→residual→refinement→merge1→merge2)
+python tables/table_4.py                 # 단계별 향상 (baseline→residual→refinement→merge1→merge2)
 python tables/table_5.py                 # 파라미터 ablation (stride·extend·turn)
 
 # 5. 그림 (→ RESULT_PATH/Figure/*)
@@ -85,18 +100,20 @@ python figures/figure_1.py               # ... figure_8.py 까지
 
 `src/config.py`에 모든 경로가 정의되어 있다. **실행 전 반드시 수정해야 한다:**
 - `DATA_ROOT`: 데이터셋과 모델 출력이 저장된 루트 디렉토리
-- `SRC_DATASET_PATH`: 원본 SEED 소스 (`image/`·`label/`·`dataset.json`). `build_dataset.py`만 읽는다
-- `DATASET_PATH`: 빌드된 ADE20K 데이터셋 경로 (`DATA_ROOT/ade20k`) — 이미지·인덱스 라벨·컬러 라벨
-- `COCO_PATH`: 빌드된 COCO 데이터셋 경로 (`DATA_ROOT/coco`) — 병합 인스턴스 GT + 이미지
-- `RESULT_DIR`: 출력(예측 JSON·CSV·Figure·Table) 저장 폴더명. 실행마다 바꿔 결과를 분리 보관한다 (예: `results_260709`)
+- `SEED_SOURCE_PATH`: 빌드가 변환할 SEED 소스(`DATA_ROOT/SEED_MAP_v1.1`). `build_dataset.py`만 읽는다
+- `RAW_SEED_PATH`: 원본 SEED 릴리스(`DATA_ROOT/SEED_MAP_v1.0`). `merge_annotation.py`의 기본 입력
+- `DATASET_PATH`: ADE20K 데이터셋 경로 (`DATA_ROOT/ade20k`) — 이미지·인덱스 라벨·컬러 라벨
+- `COCO_PATH`: COCO 데이터셋 경로 (`DATA_ROOT/coco`) — 인스턴스 GT
+- `BEST_MODEL`/`BEST_PARAMS`: 논문에 보고한 최적 조합. 자체 sweep CSV가 없을 때 이 값이 사용된다
+- `RESULT_DIR`: 출력(예측 JSON·CSV·Figure·Table) 저장 폴더명(기본 `results`). 실행마다 바꾸면 결과를 분리 보관할 수 있다
 - `RESULT_PATH`: 출력 경로 (`DATA_ROOT/RESULT_DIR`)
 - `EVAL_SPLITS`: 평가 대상 split (`validation`, `test`) / `ALL_SPLITS`: 빌더가 만드는 전체 split
 
 split→경로 헬퍼로 모든 스크립트가 데이터를 참조한다(중복 없음):
 - `image_dir(split)` = `ade20k/images/<split>`, `label_dir(split)` = `ade20k/annotations/<split>`(mIoU GT),
   `color_label_dir(split)` = `ade20k/color_annotations/<split>`
-- `coco_anno_path(split)` = `coco/annotations/instances_<split>2017.json`(COCO AP GT),
-  `coco_image_dir(split)` = `coco/<split>2017`
+- `coco_anno_path(split)` = `coco/annotations/instances_<split>2017.json`(객체 F1 GT),
+  `coco_image_dir(split)` = `coco/<split>2017`(`--coco-images`로 이미지를 채울 때만 사용)
 - `LABEL_PATH`/`COCO_MERGED_ANNO_PATH`/`COCO_ANNO_PATH`/`DATA_PATH`는 validation 기본 별칭(기존 스크립트 호환)
 - ADE20K는 train split 폴더명이 `training`이다(`ADE_SPLIT_DIR`), COCO 이미지 폴더는 `train2017/val2017/test2017`(`COCO_IMG_DIR`)
 
@@ -123,11 +140,13 @@ split→경로 헬퍼로 모든 스크립트가 데이터를 참조한다(중복
 ### 데이터 흐름
 
 ```
-satellite_good_matching_250206/{image,label}   ← 원본 SEED 소스
-        ↓ dataprep/build_dataset.py
+SEED_MAP_v1.0/{image,label}   ← 원본 SEED 릴리스 (조각난 폴리라인, 번들 미포함)
+        ↓ dataprep/merge_annotation.py (dedup → trim → 끝점 병합)
+SEED_MAP_v1.1/{image,label}   ← 병합 SEED 소스 (형식 동일)
+        ↓ dataprep/build_dataset.py (형식 변환만)
 ade20k/images/<split>/*.png                      ← 입력 위성 이미지
 ade20k/annotations/<split>/*.png                 ← GT 인덱스 레이블 (mIoU)
-coco/annotations/instances_<split>2017.json      ← GT 병합 인스턴스 (COCO AP)
+coco/annotations/instances_<split>2017.json      ← GT 인스턴스 (객체 F1)
 Internimage/ (또는 mask2former/)
   └─ <model_name>/{pred_val,pred_test}/*.png     ← 세그멘테이션 모델 출력 (클래스별 색상 코딩)
         ↓
@@ -139,9 +158,9 @@ coco_pred_{val,test}_merge{1,2}.json             # 단계별 병합 결과 (merg
 [Table 생성]  (논문 Table 1~5, 공통 헬퍼 tables/table_common.py)
 tables/num_params.py → num_params.csv             # 모델별 파라미터 수
 tables/table_1.py    → table_1.csv                # 모델 비교 (segmentation vs merge×1), val·test
-tables/table_2.py    → table_2.csv                # best 모델 클래스별 성능 (count·mIoU·AP20)
-tables/table_3.py    → table_3.csv                # best 모델 클래스별 진단 분해 (6지표)
-tables/table_4.py    → table_4.csv                # 단계별 향상 (first→residual→refinement→merge1→merge2)
+tables/table_2.py    → table_2.csv                # best 모델 클래스별 성능 (count·F1@0.5·mIoU)
+tables/table_3.py    → table_3.csv                # best 모델 클래스별 진단 분해 (precision·recall·near_miss_gt·merge_ratio·miou_match)
+tables/table_4.py    → table_4.csv                # 단계별 향상 (baseline→residual→refinement→merge1→merge2)
 tables/table_5.py    → table_5.csv                # 파라미터 ablation (stride·extend·turn)
         ↓
 [Figure 생성]
@@ -151,29 +170,29 @@ figures/figure_1.py ~ figures/figure_8.py → RESULT_PATH/Figure/*   # 논문 Fi
 ## 런타임 디렉토리 구조
 
 ```
-DATA_ROOT/
-  satellite_good_matching_250206/          # 원본 SEED 소스 (build_dataset.py만 읽음)
+DATA_ROOT/                # = 배포 번들 2026_LaneStitch_deploy (약 35GB)
+  SEED_MAP_v1.1/          # 병합 SEED 소스 (build_dataset.py가 읽음)
     ├─ image/*.png                         # 위성 이미지 (train+val+test = 12828)
-    ├─ label/*.json                        # SEED 벡터 라벨
+    ├─ label/*.json                        # 병합된 폴리라인 (형식은 v1.0과 동일)
     └─ dataset.json                        # split별 basename 목록
-  ade20k/                                   # 빌드된 ADE20K 시맨틱 세그 데이터셋
-    images/{training,validation,test}/*.png            # 위성 이미지
+  ade20k/                                   # ADE20K 시맨틱 세그 데이터셋
+    images/{training,validation,test}/*.png            # 위성 이미지 (SEED_MAP_v1.1/image와 동일 파일)
     annotations/{training,validation,test}/*.png       # 인덱스 라벨 (pixel = class_id+1, mIoU GT)
     color_annotations/{training,validation,test}/*.png # 컬러 시각화 라벨
-  coco/                                     # 빌드된 COCO 인스턴스 세그 데이터셋
-    ├─ annotations/instances_{train,validation,test}2017.json   # 병합 인스턴스 GT (COCO AP)
+  coco/                                     # COCO 인스턴스 세그 데이터셋
+    ├─ annotations/instances_{train,validation,test}2017.json   # 인스턴스 GT (객체 F1)
     ├─ annotations/instances_{...}2017_selected.json            # 평가 캐시(EXCLUDE_IDS 필터+id/area/iscrowd, 자동 생성/무효화)
-    ├─ {train2017,val2017,test2017}/*.png                       # 위성 이미지
+    ├─ {train2017,val2017,test2017}/*.png                       # `--coco-images`로 채울 때만 존재
     └─ class_counts.csv                                         # split×클래스 인스턴스 수
   Internimage/
-    ├─ checkpoint/*.pth                     # InternImage 체크포인트
+    ├─ checkpoint/<config>/{best_mIoU_iter_160000.pth, <config>.py}   # 추론용 가중치+설정
     └─ satellite_ade20k_250925_internimage_large/
          ├─ pred_val/*.png  pred_test/*.png # 색상 코딩된 세그멘테이션 예측
-         └─ metrics_{validation,test}.json  # segmentation-prediction mIoU 캐시
+         └─ metrics_{validation,test}.json  # segmentation-prediction mIoU 캐시(라벨보다 오래되면 자동 무효화)
   mask2former/
-    ├─ checkpoint/  pre_trained/            # Mask2Former 체크포인트
+    ├─ checkpoint/<config>/{best_mIoU_iter_160000.pth, <config>.py}
     └─ satellite_ade20k_250925_mask2former_{large,small}/{pred_val,pred_test}/*.png
-  results_<date>/                           # RESULT_DIR (실행마다 분리 보관)
+  results/                                  # RESULT_DIR (실행마다 이름을 바꿔 분리 보관 가능)
     ├─ total_performance.csv                # 하이퍼파라미터 전체 성능 탐색 결과
     ├─ num_params.csv                       # 모델별 파라미터 수
     ├─ _combo_logs/                         # (run_parallel_sweep) 조합별 로그

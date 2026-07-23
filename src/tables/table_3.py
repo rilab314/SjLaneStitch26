@@ -1,23 +1,25 @@
 """Table 3 — per-class diagnostic breakdown of the best model, 9 rows.
 
 Columns: class_name | precision | recall | near_miss_gt | merge_ratio | miou_match
-All based on IoU 0.2 matching. merge_ratio>1=merging, near_miss_gt=0<IoU<0.2,
-miou_match=average IoU of matched pairs. (Non-manuscript columns such as ap20_check/near_miss_pix/frag_ratio/fp_* are excluded)
+All based on IoU 0.5 matching (the F1@0.5 operating point; F1 = 2PR/(P+R) of these
+precision/recall backs the Table 2 values). merge_ratio>1=merging, near_miss_gt=0<IoU<0.5,
+miou_match=average IoU of matched pairs. (Non-manuscript columns such as near_miss_pix/frag_ratio/fp_* are excluded)
 Source: best combo, merge×1 prediction JSON.
 """
 import os
 import sys
 
-import numpy as np
 import pandas as pd
 from tqdm import tqdm
-from pycocotools import mask as maskUtils
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import _bootstrap  # noqa: F401  # registers core/tables/figures on sys.path
 import config as cfg
-from evaluator import load_json, _get_selected_annotation
+from evaluator import (load_json, _get_selected_annotation,
+                       group_anns_by_image_class, iou_matrix, greedy_match)
 import table_common as tc
+
+MATCH_IOU = cfg.F1_IOUS[0]  # 0.5 — same operating point as F1@0.5
 
 
 class Table3Builder:
@@ -30,8 +32,8 @@ class Table3Builder:
 
     def build(self):
         print(f"pred_json: {self.pred_json}")
-        gt_idx = self._group_by_image_class(load_json(_get_selected_annotation(self.gt_json))["annotations"])
-        pred_idx = self._group_by_image_class(self._pred_annotations())
+        gt_idx = group_anns_by_image_class(load_json(_get_selected_annotation(self.gt_json))["annotations"])
+        pred_idx = group_anns_by_image_class(self._pred_annotations())
         acc = {cid: self._new_acc() for cid in cfg.EVAL_CLASS_IDS}
         for img_id in tqdm(set(gt_idx) | set(pred_idx), desc="diagnostic metrics"):
             for cid in cfg.EVAL_CLASS_IDS:
@@ -45,15 +47,6 @@ class Table3Builder:
         data = load_json(self.pred_json)
         return data["annotations"] if isinstance(data, dict) else data
 
-    def _group_by_image_class(self, anns):
-        idx = {}
-        for a in anns:
-            cid = int(a.get("category_id", 0))
-            if cid in cfg.EXCLUDE_IDS:
-                continue
-            idx.setdefault(str(a.get("image_id")), {}).setdefault(cid, []).append(a)
-        return idx
-
     def _new_acc(self):
         return {"n_gt": 0, "n_pred": 0, "matched": 0, "matched_iou": 0.0,
                 "near_miss": 0, "merge_sum": 0}
@@ -62,37 +55,16 @@ class Table3Builder:
         nG, nP = len(gts), len(prs)
         acc["n_gt"] += nG
         acc["n_pred"] += nP
-        iou = self._iou_matrix(prs, gts)
+        iou = iou_matrix(prs, gts)
         for j in range(nG):
             best = float(iou[:, j].max()) if nP else 0.0
-            if 0.0 < best < 0.2:
+            if 0.0 < best < MATCH_IOU:
                 acc["near_miss"] += 1
         for i in range(nP):
             acc["merge_sum"] += int((iou[i, :] > 0).sum())
-        for v in self._greedy_match(iou):
+        for v in greedy_match(iou, MATCH_IOU):
             acc["matched"] += 1
             acc["matched_iou"] += v
-
-    def _iou_matrix(self, prs, gts):
-        if not prs or not gts:
-            return np.zeros((len(prs), len(gts)), dtype=np.float64)
-        segs_p = [p["segmentation"] for p in prs]
-        segs_g = [g["segmentation"] for g in gts]
-        return np.asarray(maskUtils.iou(segs_p, segs_g, [0] * len(gts)),
-                          dtype=np.float64).reshape(len(prs), len(gts))
-
-    def _greedy_match(self, iou, thr=0.2):
-        nP, nG = iou.shape
-        pairs = sorted(((iou[i, j], i, j) for i in range(nP) for j in range(nG)
-                        if iou[i, j] >= thr), reverse=True)
-        used_p, used_g, ious = set(), set(), []
-        for v, i, j in pairs:
-            if i in used_p or j in used_g:
-                continue
-            used_p.add(i)
-            used_g.add(j)
-            ious.append(v)
-        return ious
 
     def _finalize(self, a):
         nP, nG, M = a["n_pred"], a["n_gt"], a["matched"]

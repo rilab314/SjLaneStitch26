@@ -1,6 +1,7 @@
 """Figure 8 — per-class failure cases (per-class, original|GT|segmentation|TP/FP/FN 1x4, original resolution).
 
-Matches the target classes' GT and predictions at IoU 0.2 to show failure signatures. 4 case types:
+Matches the target classes' GT and predictions at IoU 0.5 (figure_match.IOU_THR) to show failure
+signatures. 4 case types:
   edge_line (adjacent fusion + near-miss) / no_parking (under-detection) / bus_only (false detection) / bicycle (sparse, loose).
 (a) original | (b) original + GT linestring (class render color, endpoint dots) | (c) original + segmentation map (opaque)
 | (d) TP (green)/FP (red) = prediction lines, FN (blue) = missed GT lines.
@@ -21,12 +22,13 @@ import figure_match as fmatch
 from figure_base import FigureGenerator
 
 
-def cond_edge(s):        # adjacent fusion + near-miss
+def cond_edge(s):        # adjacent fusion + near-miss (49% of edge frames at IoU 0.5 — still selective)
     return s["merge"] >= 1 and s["near"] >= 1
 
 
-def cond_no_parking(s):  # long-line under-detection (missed detection)
-    return s["miss"] >= 1 or (s["recall"] <= 0.5 and s["near"] >= 1)
+def cond_no_parking(s):  # long-line under-detection: several fully-missed GT + poor recall.
+    # The old `miss>=1 or (recall<=0.5 and near>=1)` passed 89% of frames at IoU 0.5 (vacuous).
+    return s["miss"] >= 2 and s["recall"] <= 0.5
 
 
 def cond_bus_only(s):    # false detection (FP) — heavily relaxed: frames where bus_only appears in GT/prediction

@@ -21,7 +21,7 @@ class PipelineFigure(FigureGenerator):
 
     name = "Figure_2"
     min_trim_drop = 50.0   # only frames with strong center_line trimming (drop >= 50px)
-    ap20_min = 0.50
+    f1_min = 0.45
 
     def build_figure(self, image_id, path):
         pred_img = self.read_prediction(image_id)
@@ -37,10 +37,10 @@ class PipelineFigure(FigureGenerator):
         return self.compose(stage, image_id), ""
 
     def is_good_frame(self, stage, image_id):
-        """Decides whether this is a clean example whose frame AP20 is at or above the threshold."""
+        """Decides whether this is a clean example whose frame F1@0.5 is above the threshold."""
         pred_anns = self._detector.convert_to_json(self.final_merge(stage), image_id)
-        ap20 = fm.measure_frame_ap20(self.gt_annotations(image_id), pred_anns, image_id)
-        return ap20 is not None and ap20 > self.ap20_min
+        f1 = fm.measure_frame_f1(self.gt_annotations(image_id), pred_anns)
+        return f1 is not None and f1 > self.f1_min
 
     def compose(self, stage, image_id):
         """Combines the five panels horizontally with white gaps."""

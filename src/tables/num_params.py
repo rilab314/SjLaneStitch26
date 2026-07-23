@@ -9,10 +9,11 @@ import torch
 import pandas as pd
 
 
+# The same checkpoints the inference scripts load (inference/infer_*.py MODELS).
 CHECKPOINTS = {
     "internimage_large": f"{cfg.DATA_ROOT}/Internimage/checkpoint/upernet_internimage_l_512_160k_satellite/best_mIoU_iter_160000.pth",
-    "mask2former_small": f"{cfg.DATA_ROOT}/mask2former/checkpoint/mask2former_swin-s_8xb2-160k_ade20k-512x512/iter_160000.pth",
-    "mask2former_large": f"{cfg.DATA_ROOT}/mask2former/checkpoint/mask2former_swin-l-in22k-384x384-pre_8xb2-160k_ade20k-640x640/iter_160000.pth",
+    "mask2former_small": f"{cfg.DATA_ROOT}/mask2former/checkpoint/mask2former_swin-s_8xb2-160k_ade20k-512x512/best_mIoU_iter_160000.pth",
+    "mask2former_large": f"{cfg.DATA_ROOT}/mask2former/checkpoint/mask2former_swin-l-in22k-384x384-pre_8xb2-160k_ade20k-640x640/best_mIoU_iter_160000.pth",
 }
 
 

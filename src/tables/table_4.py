@@ -1,9 +1,9 @@
 """Table 4 — stage-wise performance improvement of the best model, 5 rows.
 
-Columns: Stage | Instances | AP20 | mIoU
-Cumulative stages: first extraction -> + residual re-extraction -> + refinement -> merge×1 -> merge×2.
+Columns: Stage | Instances | F1@0.5 | mIoU
+Cumulative stages: Baseline (pure vectorization) -> + residual re-extraction -> + refinement -> merge×1 -> merge×2.
 Refinement/merge1/merge2 (stages 3-5) are read directly from total_performance.csv,
-and only the first/residual (stages 1-2), which are absent from total_performance.csv, are freshly evaluated via stage_linestrings.
+and only the baseline/residual (stages 1-2), which are absent from total_performance.csv, are freshly evaluated via stage_linestrings.
 """
 import os
 import sys
@@ -18,12 +18,12 @@ import _bootstrap  # noqa: F401  # registers core/tables/figures on sys.path
 import config as cfg
 from lane_stitcher import LaneStitcher
 from stitch_config import load_stitch_config
-from evaluator import evaluate_coco_ap, evaluate_miou_json
+from evaluator import evaluate_f1, evaluate_miou_json
 import table_common as tc
 
 
 class Table4Builder:
-    """Summarize stage-wise (first/residual/refinement/merge1/merge2) AP20/mIoU/instance counts in 5 rows."""
+    """Summarize stage-wise (baseline/residual/refinement/merge1/merge2) F1/mIoU/instance counts in 5 rows."""
 
     def __init__(self, total_csv_path, save_name):
         self.df = tc.with_val_aliases(pd.read_csv(total_csv_path))
@@ -33,7 +33,7 @@ class Table4Builder:
     def build(self):
         fresh = self._evaluate_first_and_combined()
         rows = [
-            self._row("First extraction", fresh["first"]),
+            self._row("Baseline", fresh["first"]),
             self._row("+ Residual re-extraction", fresh["combined"]),
             self._row("+ Refinement", self._csv_stage(0)),
             self._row("+ Merge ×1", self._csv_stage(1)),
@@ -43,7 +43,8 @@ class Table4Builder:
 
     def _row(self, stage, metrics):
         return {"Stage": stage, "Instances": int(metrics["instances"]),
-                "AP20": tc.pct(metrics["AP20"]), "mIoU": tc.pct(metrics["mIoU"])}
+                cfg.F1_PRIMARY: tc.pct(metrics[cfg.F1_PRIMARY]),
+                "mIoU": tc.pct(metrics["mIoU"])}
 
     def _csv_stage(self, merge_count):
         """Read the metrics of the best combo, merge_count row from total_performance.csv."""
@@ -55,10 +56,11 @@ class Table4Builder:
                 (self.df["turn_penalties"] == c["turn_penalties"]) &
                 (self.df["merge_count"] == merge_count))
         row = self.df[mask].iloc[0]
-        return {"instances": row["instances"], "AP20": row["AP20"], "mIoU": row["mIoU"]}
+        return {"instances": row["instances"], cfg.F1_PRIMARY: row[cfg.F1_PRIMARY],
+                "mIoU": row["mIoU"]}
 
     def _evaluate_first_and_combined(self):
-        """Build first/residual stage predictions via stage_linestrings and freshly evaluate them."""
+        """Build baseline(first)/residual stage predictions via stage_linestrings and freshly evaluate them."""
         first_json, combined_json = self._build_stage_predictions()
         return {"first": self._evaluate(first_json),
                 "combined": self._evaluate(combined_json)}
@@ -91,10 +93,11 @@ class Table4Builder:
         return path
 
     def _evaluate(self, pred_json):
-        ap = evaluate_coco_ap(cfg.COCO_MERGED_ANNO_PATH, pred_json)
+        f1 = evaluate_f1(cfg.COCO_MERGED_ANNO_PATH, pred_json)
         # Same mIoU label basis as the total_performance sweep (both read ade20k/annotations/validation).
         miou = evaluate_miou_json(pred_json, cfg.label_dir("validation"))
-        return {"instances": ap["instances"], "AP20": ap["AP20"], "mIoU": miou["mIoU"]}
+        return {"instances": f1["instances"], cfg.F1_PRIMARY: f1[cfg.F1_PRIMARY],
+                "mIoU": miou["mIoU"]}
 
 
 def main():

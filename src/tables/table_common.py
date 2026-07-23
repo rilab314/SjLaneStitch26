@@ -30,9 +30,9 @@ def tables_dir():
 
 def with_val_aliases(df):
     """Add suffix-less aliases for the (val) metric columns of total_performance/eval.
-    A backward-compatibility shim so existing table scripts can read validation values directly via df['AP20'], etc.
-    (Test columns are accessed directly via df['AP20(test)'].)"""
-    for m in ("instances", "AP10", "AP20", "AP50", "mIoU"):
+    A backward-compatibility shim so existing table scripts can read validation values directly via df['F1@0.5'], etc.
+    (Test columns are accessed directly via df['F1@0.5(test)'].)"""
+    for m in ("instances", *cfg.F1_METRICS, "mIoU"):
         v = cfg.mcol(m, "validation")
         if v in df.columns and m not in df.columns:
             df[m] = df[v]
@@ -45,9 +45,9 @@ def load_total_performance():
 
 
 def best_combo(df):
-    """Return the model and hyperparameters (dict) of the row with the highest AP20(val)."""
-    ap = cfg.mcol("AP20", "validation") if cfg.mcol("AP20", "validation") in df.columns else "AP20"
-    best = df.sort_values(ap, ascending=False, na_position="last").iloc[0]
+    """Return the model and hyperparameters (dict) of the row with the highest F1(val)."""
+    metric = cfg.primary_metric_col(df.columns)
+    best = df.sort_values(metric, ascending=False, na_position="last").iloc[0]
     return {
         "model_name": str(best["model_name"]),
         "thicknesses": int(best["thicknesses"]),

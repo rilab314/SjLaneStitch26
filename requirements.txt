@@ -1,15 +1,9 @@
-imageio==2.35.1
-joblib==1.4.2
-lazy-loader==0.4
-networkx==3.1
-numpy==1.24.4
+# Post-processing pipeline dependencies (top-level packages only).
+# Transitive sub-dependencies are pulled in automatically and not listed here.
+# Segmentation inference (torch / mmcv / mmseg / DCNv3) uses a separate environment.
+numpy==2.2.6
 opencv-contrib-python==4.11.0.86
-packaging==24.2
-pillow==10.4.0
-PyWavelets==1.4.1
-scikit-image==0.21.0
-scikit-learn==1.3.2
-scipy==1.10.1
-threadpoolctl==3.5.0
-tifffile==2023.7.10
-tqdm==4.67.1
+pandas==2.3.2
+pycocotools==2.0.10
+shapely==2.1.1
+tqdm==4.67.3

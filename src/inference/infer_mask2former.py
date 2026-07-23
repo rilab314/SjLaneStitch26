@@ -1,20 +1,21 @@
 """
 Mask2Former segmentation inference -> generate pure class-color masks (infer_mask2former)
 
-Run environment (conda): mmseg  (torch 2.0+cu118, mmcv 2.0.0, mmdet 3.0.0, mmsegmentation 1.2.2)
+Run environment: the Mask2Former inference venv (see README §3.3 / requirements-mask2former.txt)
+  — torch 2.0+cu118, mmcv 2.0.0, mmdet 3.0.0, mmsegmentation 1.2.2.
 The config (.py, self-contained) and best checkpoint are under CKPT_ROOT.
 
-Usage:
+Usage (with .venv-mask2former activated):
   cd src
-  conda run -n mmseg python infer_mask2former.py --model mask2former_large
-  conda run -n mmseg python infer_mask2former.py --model mask2former_large --validate
-  conda run -n mmseg python infer_mask2former.py --model mask2former_small --splits test
+  python inference/infer_mask2former.py --model mask2former_large
+  python inference/infer_mask2former.py --model mask2former_large --validate
+  python inference/infer_mask2former.py --model mask2former_small --splits test
 
 Output: <DATA_ROOT>/mask2former/satellite_ade20k_250925_<model>/{pred_val,pred_test}/*.png
 
 Note - class index mapping:
   The checkpoint head is 150-class (stock ADE20K) and the config has reduce_zero_label=True, but
-  in the existing predictions (prediction/*.png) the background is black (id 0), so the model index
+  in the existing predictions (pred_val/*.png) the background is black (id 0), so the model index
   appears to match the METAINFO id directly (CLASS_OFFSET=0). Before trusting the test predictions,
   always confirm with --validate that it reproduces the existing val predictions (pixel agreement ~1.0).
   If it does not match, try --class-offset 1.
